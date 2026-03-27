@@ -32,4 +32,3 @@ jobs:
 
       - name: Build Docker image
         run: docker build -f Dockerfile --build-arg GIT_SHA=${{ github.sha }} .
-

@@ -14,11 +14,19 @@ GITHUB_CACHE_TTL_S = float(os.getenv("GITHUB_UPDATE_CACHE_TTL_S", "600"))
 DEFAULT_REPO = "Erik-Soluna/canaan-local-scanner"
 
 
+def _env_deploy_sha(key: str) -> str | None:
+    """Return a commit-ish value from env, or None if unset / placeholder."""
+    v = os.getenv(key, "").strip()
+    if not v or v.lower() == "unknown":
+        return None
+    return v[:64]
+
+
 def get_deploy_sha(app_package_dir: Path) -> str:
     for key in ("DEPLOY_SHA", "GIT_SHA"):
-        v = os.getenv(key, "").strip()
+        v = _env_deploy_sha(key)
         if v:
-            return v[:64]
+            return v
     p = app_package_dir / ".deploy_sha"
     if p.is_file():
         return p.read_text(encoding="utf-8").strip()[:64]

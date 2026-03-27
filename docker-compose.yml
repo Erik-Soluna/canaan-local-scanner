@@ -1,9 +1,12 @@
+version: "3.9"
+
 services:
   canaan-scanner:
     build:
       context: .
       dockerfile: Dockerfile
       args:
+        # Set before build: export GIT_SHA=$(git rev-parse HEAD)
         GIT_SHA: ${GIT_SHA:-unknown}
     restart: unless-stopped
     env_file:
@@ -11,19 +14,27 @@ services:
     ports:
       - "8000:8000"
     environment:
+      # Set these for first-run initialization.
       - ADMIN_USERNAME=${ADMIN_USERNAME:-admin}
       - ADMIN_PASSWORD=${ADMIN_PASSWORD:-admin}
       - SESSION_SECRET=${SESSION_SECRET:-dev-change-me}
       - DB_PATH=/data/canaan_scanner.sqlite
+
+      # Scan tuning (optional)
       - SCAN_CONCURRENCY=${SCAN_CONCURRENCY:-20}
       - CONNECT_TIMEOUT_S=${CONNECT_TIMEOUT_S:-2.0}
       - READ_TIMEOUT_S=${READ_TIMEOUT_S:-5.0}
       - MINER_PORT=${MINER_PORT:-4028}
       - MAX_IPS_PER_SCAN=${MAX_IPS_PER_SCAN:-5000}
-      - DEBUG_EXPORT_MAX_BYTES=${DEBUG_EXPORT_MAX_BYTES:-52428800}
+
+      # Runtime GIT_SHA from .env (optional). Empty = use baked image / .deploy_sha (see Dockerfile).
+      - GIT_SHA=${GIT_SHA:-}
+      # Optional: override deploy revision without rebuilding (see get_deploy_sha; precedence over baked GIT_SHA)
       - DEPLOY_SHA=${DEPLOY_SHA:-}
+      # Optional GitHub API for update checks (Settings / banner)
       - GITHUB_TOKEN=${GITHUB_TOKEN:-}
       - GITHUB_REPO=${GITHUB_REPO:-Erik-Soluna/canaan-local-scanner}
+      - GITHUB_UPDATE_CACHE_TTL_S=${GITHUB_UPDATE_CACHE_TTL_S:-600}
     volumes:
       - ./data:/data
     healthcheck:
@@ -32,3 +43,4 @@ services:
       timeout: 10s
       retries: 3
       start_period: 20s
+

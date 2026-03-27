@@ -12,9 +12,14 @@ Web app that scans Canaan Avalon miners (A15 series) via the documented TCP API 
 ## Run (Docker, Linux host)
 1. Copy env template and edit secrets:
    - `cp .env.example .env`
-2. Start:
+2. **Bake the git revision into the image** so Settings / update checks show a real `deployed_sha` (not `unknown`):
+   - From the repo root on the server or in CI, set the build arg to the commit you are deploying:
+   - `export GIT_SHA=$(git rev-parse HEAD)` then `docker compose build --build-arg GIT_SHA=$GIT_SHA`  
+   - Or add `GIT_SHA=<full commit sha>` to `.env` before `docker compose build` (compose passes `build.args` from `.env`).
+3. Start:
    - `docker compose up -d --build`
-3. Check:
+4. Optional: without rebuilding, set **`DEPLOY_SHA`** in `.env` to the same value as the running image’s commit; the app reads `DEPLOY_SHA` before `GIT_SHA`.
+5. Check:
    - `docker compose ps`
    - `docker compose logs -f`
 
@@ -36,6 +41,8 @@ Accounts are stored in SQLite with `pbkdf2_sha256` password hashes.
 - `CONNECT_TIMEOUT_S` (default: `2.0`)
 - `READ_TIMEOUT_S` (default: `5.0`)
 - `MAX_IPS_PER_SCAN` (default: `5000`)
+- `GIT_SHA` — used by **docker compose build** (see `docker-compose.yml` `build.args`); set to `git rev-parse HEAD` when building the image you deploy.
+- `DEPLOY_SHA` — optional **runtime** override (same meaning as `GIT_SHA`); highest priority in `get_deploy_sha()`.
 
 ## Scan results
 - Hash-rate is reported as sum of `MHS av` from the miner `summary` response.
