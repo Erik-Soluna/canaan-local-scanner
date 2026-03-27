@@ -1,0 +1,2 @@
+Marker commit to advance GitHub main SHA for update-status / Settings verification.
+Remove or replace when no longer needed.
