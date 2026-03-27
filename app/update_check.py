@@ -29,9 +29,9 @@ def _github_repo_path() -> str:
     return os.getenv("GITHUB_REPO", DEFAULT_REPO).strip() or DEFAULT_REPO
 
 
-def fetch_github_main_sha() -> tuple[str | None, str | None]:
+def fetch_github_main_sha(*, force: bool = False) -> tuple[str | None, str | None]:
     now = time.monotonic()
-    if (
+    if not force and (
         _GITHUB_CACHE["sha"] is not None
         and now - float(_GITHUB_CACHE["ts"]) < GITHUB_CACHE_TTL_S
     ):
@@ -70,8 +70,8 @@ def _short_sha(s: str) -> str:
     return s[:7] if len(s) >= 7 else s
 
 
-def build_update_payload(deployed_sha: str) -> dict:
-    gh_sha, gh_err = fetch_github_main_sha()
+def build_update_payload(deployed_sha: str, *, force_refresh: bool = False) -> dict:
+    gh_sha, gh_err = fetch_github_main_sha(force=force_refresh)
     update_available = False
     if gh_sha and deployed_sha not in ("", "unknown"):
         update_available = _short_sha(gh_sha) != _short_sha(deployed_sha)

@@ -74,6 +74,9 @@ def query_device_text(
     connect_timeout_s: float = 2.0,
     read_timeout_s: float = 5.0,
 ) -> DeviceQueryResult:
+    """
+    Sync variant; mirrors `query_device_text_async` (partial response before read timeout counts as success).
+    """
     # Protocol mirrors the docs examples that use: echo -n "<query>" | socat ...
     # So we send raw query bytes without newline.
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
@@ -88,7 +91,8 @@ def query_device_text(
             try:
                 data = sock.recv(4096)
             except socket.timeout:
-                # If the device doesn't close the socket, we still fail fast.
+                if chunks:
+                    break
                 raise DeviceQueryException("read_timeout")
             if not data:
                 break

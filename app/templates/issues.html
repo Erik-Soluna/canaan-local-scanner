@@ -5,6 +5,11 @@
   <div class="muted" style="margin-top: 8px;">
     Range: {{ scan_job.range_name_snapshot }} (status: {{ scan_job.status }})
   </div>
+  <p class="muted" style="margin-top: 10px; max-width: 52rem;">
+    A read timeout is only stored as an error when no response bytes were received for that read.
+    If the miner already sent partial data and the connection is slow to close, the scan treats that query as successful.
+    Rows below are the first recorded problem per device (by stage), not every transient timeout.
+  </p>
 
   {% if scan_job.error_message %}
     <div class="error" style="margin-top: 10px;"><strong>Job error:</strong> {{ scan_job.error_message }}</div>

@@ -643,14 +643,14 @@ def _devices_where(
 
 
 @app.get("/api/update-status", response_class=JSONResponse)
-def api_update_status(request: Request):
+def api_update_status(request: Request, refresh: bool = Query(False)):
     db = SessionLocal()
     try:
         user = require_user(request, db)
         if not user:
             return JSONResponse({"error": "unauthorized"}, status_code=401)
         deployed = get_deploy_sha(BASE_DIR)
-        return build_update_payload(deployed)
+        return build_update_payload(deployed, force_refresh=refresh)
     finally:
         db.close()
 
