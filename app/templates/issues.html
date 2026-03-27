@@ -1,0 +1,63 @@
+{% extends "base.html" %}
+
+{% block content %}
+  <h2>Issues - Scan Job {{ scan_job.id }}</h2>
+  <div class="muted" style="margin-top: 8px;">
+    Range: {{ scan_job.range_name_snapshot }} (status: {{ scan_job.status }})
+  </div>
+
+  {% if scan_job.error_message %}
+    <div class="error" style="margin-top: 10px;"><strong>Job error:</strong> {{ scan_job.error_message }}</div>
+  {% endif %}
+
+  <div class="card">
+    <h3>Aggregated Errors</h3>
+    {% if agg_rows|length == 0 %}
+      <div class="muted">No errors recorded.</div>
+    {% else %}
+      <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Error Type</th>
+            <th>Stage</th>
+            <th>Count</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for b in agg_rows %}
+            <tr>
+              <td style="font-family: monospace;">{{ b.error_type }}</td>
+              <td style="font-family: monospace;">{{ b.stage }}</td>
+              <td>{{ b.count }}</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      </div>
+    {% endif %}
+  </div>
+
+  {% if examples|length > 0 %}
+    <div class="card">
+      <h3>Examples (Top Buckets)</h3>
+      {% for ex in examples %}
+        <div class="card" style="margin-top:12px; border-color:#eee;">
+          <div><strong>Error:</strong> <span style="font-family: monospace;">{{ ex.error_type }}</span></div>
+          <div><strong>Stage:</strong> <span style="font-family: monospace;">{{ ex.stage }}</span></div>
+          <div><strong>Count:</strong> {{ ex.count }}</div>
+          <div class="muted" style="margin-top:8px;">Sample devices:</div>
+          <ul>
+            {% for r in ex.examples %}
+              <li>
+                <span style="font-family: monospace;">{{ r.ip }}</span> -
+                <span style="font-family: monospace;">{{ r.message }}</span>
+              </li>
+            {% endfor %}
+          </ul>
+        </div>
+      {% endfor %}
+    </div>
+  {% endif %}
+{% endblock %}
+

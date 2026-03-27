@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+
+{% block content %}
+  <h2>{% if mode == "edit" %}Edit IP Range{% else %}New IP Range{% endif %}</h2>
+
+  {% if error %}
+    <div class="error">{{ error }}</div>
+  {% endif %}
+
+  <div class="card">
+    <form method="post" action="{% if mode == 'edit' %}/ranges/{{ range.id }}/edit{% else %}/ranges{% endif %}" class="flex-col gap-md">
+      <div class="flex-row-responsive">
+        <label>
+          Name
+          <input name="name" type="text" required value="{{ range.name if mode == 'edit' else '' }}" />
+        </label>
+        <label style="flex: 2 1 320px;">
+          Spec (`A.B.C.D` where octets may be `N` or `N-M`)
+          <input name="spec" type="text" required value="{{ range.spec if mode == 'edit' else '' }}" />
+        </label>
+      </div>
+      <div class="flex gap-sm items-center">
+        <button type="submit">Save</button>
+        <a href="/ranges">Cancel</a>
+      </div>
+    </form>
+  </div>
+{% endblock %}
+

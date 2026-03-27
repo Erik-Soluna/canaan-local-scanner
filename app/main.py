@@ -1,0 +1,832 @@
+from __future__ import annotations
+
+import os
+from pathlib import Path
+
+from fastapi import FastAPI, Form, Request
+from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
+from fastapi.templating import Jinja2Templates
+from sqlalchemy import case, func, select, delete
+from sqlalchemy.orm import Session
+from starlette.middleware.sessions import SessionMiddleware
+
+from . import audit
+from .auth import create_initial_admin_if_missing, get_current_user, verify_password
+from .db import ENGINE, SessionLocal
+from .models import DeviceResult, IpRange, ScanJob, User
+from .scanner import ip_expansion_count, run_scan_job_background
+
+
+BASE_DIR = Path(__file__).resolve().parent
+TEMPLATES_DIR = BASE_DIR / "templates"
+templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
+
+
+def get_client_ip(request: Request) -> str:
+    try:
+        if request.client and request.client.host:
+            return request.client.host
+    except Exception:
+        pass
+    return "unknown"
+
+
+app = FastAPI(title="Canaan A15 IP Scanner")
+
+session_secret = os.getenv("SESSION_SECRET", "dev-change-me")
+app.add_middleware(SessionMiddleware, secret_key=session_secret)
+
+
+@app.on_event("startup")
+def on_startup() -> None:
+    # Create tables (no migrations to keep this from-scratch setup simple).
+    from .db import Base
+
+    Base.metadata.create_all(ENGINE)
+    # Seed an admin user if none exists.
+    session: Session = SessionLocal()
+    try:
+        create_initial_admin_if_missing(session)
+    finally:
+        session.close()
+
+
+def require_user(request: Request, db: Session) -> User | None:
+    return get_current_user(db, request)
+
+
+def redirect_to_login() -> RedirectResponse:
+    return RedirectResponse(url="/login", status_code=303)
+
+
+@app.get("/", response_class=RedirectResponse)
+def root(request: Request):
+    db = SessionLocal()
+    try:
+        user = require_user(request, db)
+    finally:
+        db.close()
+    if not user:
+        return redirect_to_login()
+    return RedirectResponse(url="/ranges", status_code=303)
+
+
+@app.get("/login", response_class=HTMLResponse)
+def login_get(request: Request, error: str | None = None):
+    return templates.TemplateResponse(
+        "login.html",
+        {"request": request, "error": error, "username_prefill": ""},
+        status_code=200,
+    )
+
+
+@app.post("/login", response_class=HTMLResponse)
+def login_post(
+    request: Request,
+    username: str = Form(...),
+    password: str = Form(...),
+):
+    db = SessionLocal()
+    try:
+        user = db.execute(select(User).where(User.username == username)).scalar_one_or_none()
+        if user is None or not user.is_enabled:
+            return login_get(request, error="Invalid username or disabled account")
+        if not verify_password(password, user.password_hash):
+            return login_get(request, error="Invalid password")
+
+        request.session["user_id"] = user.id
+        audit.log_event(
+            db,
+            user_id=user.id,
+            request_ip=get_client_ip(request),
+            event_type="USER_LOGIN",
+            target_type="user",
+            target_id=str(user.id),
+            metadata={"username": user.username},
+        )
+        return RedirectResponse(url="/ranges", status_code=303)
+    finally:
+        db.close()
+
+
+@app.post("/logout", response_class=RedirectResponse)
+def logout_post(request: Request):
+    request.session.clear()
+    return RedirectResponse(url="/login", status_code=303)
+
+
+@app.get("/ranges", response_class=HTMLResponse)
+def ranges_get(request: Request):
+    db = SessionLocal()
+    try:
+        user = require_user(request, db)
+        if not user:
+            return redirect_to_login()
+
+        ranges = list(db.execute(select(IpRange).order_by(IpRange.created_at.desc())).scalars().all())
+        return templates.TemplateResponse(
+            "ranges.html",
+            {"request": request, "user": user, "ranges": ranges, "error": None},
+        )
+    finally:
+        db.close()
+
+
+@app.get("/jobs", response_class=HTMLResponse)
+def jobs_history_get(
+    request: Request,
+    range_id: int | None = None,
+    status: str | None = None,
+    limit: int = 50,
+):
+    db = SessionLocal()
+    try:
+        user = require_user(request, db)
+        if not user:
+            return redirect_to_login()
+
+        limit = max(1, min(int(limit or 50), 200))
+
+        stmt = select(ScanJob).order_by(ScanJob.created_at.desc()).limit(limit)
+        if range_id:
+            stmt = stmt.where(ScanJob.ip_range_id == range_id)
+        if status:
+            stmt = stmt.where(ScanJob.status == status)
+
+        jobs = list(db.execute(stmt).scalars().all())
+        ranges = list(db.execute(select(IpRange).order_by(IpRange.name.asc())).scalars().all())
+        return templates.TemplateResponse(
+            "history.html",
+            {
+                "request": request,
+                "user": user,
+                "jobs": jobs,
+                "ranges": ranges,
+                "filter_range_id": range_id,
+                "filter_status": status,
+                "limit": limit,
+            },
+        )
+    finally:
+        db.close()
+
+
+@app.get("/dashboard", response_class=HTMLResponse)
+def dashboard_get(request: Request, limit: int = 50):
+    db = SessionLocal()
+    try:
+        user = require_user(request, db)
+        if not user:
+            return redirect_to_login()
+
+        limit = max(1, min(int(limit or 50), 200))
+        recent_jobs = list(
+            db.execute(select(ScanJob).order_by(ScanJob.created_at.desc()).limit(limit)).scalars().all()
+        )
+
+        last_job = recent_jobs[0] if recent_jobs else None
+        last_completed = next((j for j in recent_jobs if j.status == "completed"), None)
+        completed_jobs = [j for j in recent_jobs if j.status == "completed"]
+        failed_jobs = [j for j in recent_jobs if j.status == "failed"]
+
+        def avg(nums: list[float]) -> float:
+            if not nums:
+                return 0.0
+            return float(sum(nums) / len(nums))
+
+        stats = {
+            "total_jobs": len(recent_jobs),
+            "completed_jobs": len(completed_jobs),
+            "failed_jobs": len(failed_jobs),
+            "avg_online": avg([float(j.online_ips or 0) for j in completed_jobs]),
+            "avg_hash_sum": avg([float(j.hash_rate_sum or 0.0) for j in completed_jobs]),
+        }
+
+        return templates.TemplateResponse(
+            "dashboard.html",
+            {
+                "request": request,
+                "user": user,
+                "limit": limit,
+                "last_job": last_job,
+                "last_completed_job_id": last_completed.id if last_completed else None,
+                "stats": stats,
+            },
+        )
+    finally:
+        db.close()
+
+
+@app.post("/ranges", response_class=HTMLResponse)
+def ranges_create(
+    request: Request,
+    name: str = Form(...),
+    spec: str = Form(...),
+):
+    db = SessionLocal()
+    try:
+        user = require_user(request, db)
+        if not user:
+            return redirect_to_login()
+
+        name = name.strip()
+        spec = spec.strip()
+        try:
+            total_ips = ip_expansion_count(spec)
+        except Exception as e:
+            ranges = list(db.execute(select(IpRange).order_by(IpRange.created_at.desc())).scalars().all())
+            return templates.TemplateResponse(
+                "ranges.html",
+                {"request": request, "user": user, "ranges": ranges, "error": f"Invalid IP spec: {e}"},
+                status_code=400,
+            )
+
+        ip_range = IpRange(name=name, spec=spec, enabled=True, created_by_user_id=user.id)
+        db.add(ip_range)
+        db.commit()
+
+        audit.log_event(
+            db,
+            user_id=user.id,
+            request_ip=get_client_ip(request),
+            event_type="RANGE_CREATE",
+            target_type="ip_range",
+            target_id=str(ip_range.id),
+            metadata={"name": name, "spec": spec, "expanded_ips": total_ips},
+        )
+        return RedirectResponse(url="/ranges", status_code=303)
+    finally:
+        db.close()
+
+
+@app.post("/ranges/{range_id}/toggle", response_class=RedirectResponse)
+def ranges_toggle(request: Request, range_id: int):
+    db = SessionLocal()
+    try:
+        user = require_user(request, db)
+        if not user:
+            return redirect_to_login()
+
+        ip_range = db.execute(select(IpRange).where(IpRange.id == range_id)).scalar_one_or_none()
+        if not ip_range:
+            return RedirectResponse(url="/ranges", status_code=303)
+
+        ip_range.enabled = not bool(ip_range.enabled)
+        db.commit()
+        audit.log_event(
+            db,
+            user_id=user.id,
+            request_ip=get_client_ip(request),
+            event_type="RANGE_TOGGLE",
+            target_type="ip_range",
+            target_id=str(ip_range.id),
+            metadata={"enabled": ip_range.enabled, "name": ip_range.name},
+        )
+        return RedirectResponse(url="/ranges", status_code=303)
+    finally:
+        db.close()
+
+
+@app.get("/ranges/{range_id}/edit", response_class=HTMLResponse)
+def range_edit_get(request: Request, range_id: int):
+    db = SessionLocal()
+    try:
+        user = require_user(request, db)
+        if not user:
+            return redirect_to_login()
+
+        ip_range = db.execute(select(IpRange).where(IpRange.id == range_id)).scalar_one_or_none()
+        if not ip_range:
+            return RedirectResponse(url="/ranges", status_code=303)
+
+        return templates.TemplateResponse(
+            "range_form.html",
+            {"request": request, "user": user, "mode": "edit", "range": ip_range, "error": None},
+        )
+    finally:
+        db.close()
+
+
+@app.post("/ranges/{range_id}/edit", response_class=HTMLResponse)
+def range_edit_post(
+    request: Request,
+    range_id: int,
+    name: str = Form(...),
+    spec: str = Form(...),
+):
+    db = SessionLocal()
+    try:
+        user = require_user(request, db)
+        if not user:
+            return redirect_to_login()
+
+        ip_range = db.execute(select(IpRange).where(IpRange.id == range_id)).scalar_one_or_none()
+        if not ip_range:
+            return RedirectResponse(url="/ranges", status_code=303)
+
+        name = name.strip()
+        spec = spec.strip()
+        try:
+            total_ips = ip_expansion_count(spec)
+        except Exception as e:
+            return templates.TemplateResponse(
+                "range_form.html",
+                {"request": request, "user": user, "mode": "edit", "range": ip_range, "error": f"Invalid spec: {e}"},
+                status_code=400,
+            )
+
+        ip_range.name = name
+        ip_range.spec = spec
+        db.commit()
+        audit.log_event(
+            db,
+            user_id=user.id,
+            request_ip=get_client_ip(request),
+            event_type="RANGE_UPDATE",
+            target_type="ip_range",
+            target_id=str(ip_range.id),
+            metadata={"name": name, "spec": spec, "expanded_ips": total_ips},
+        )
+
+        return RedirectResponse(url="/ranges", status_code=303)
+    finally:
+        db.close()
+
+
+@app.post("/ranges/{range_id}/delete", response_class=RedirectResponse)
+def range_delete_post(request: Request, range_id: int):
+    db = SessionLocal()
+    try:
+        user = require_user(request, db)
+        if not user:
+            return redirect_to_login()
+
+        ip_range = db.execute(select(IpRange).where(IpRange.id == range_id)).scalar_one_or_none()
+        if not ip_range:
+            return RedirectResponse(url="/ranges", status_code=303)
+
+        # Best-effort cleanup.
+        jobs = list(db.execute(select(ScanJob).where(ScanJob.ip_range_id == ip_range.id)).scalars().all())
+        for job in jobs:
+            db.execute(delete(DeviceResult).where(DeviceResult.scan_job_id == job.id))
+        db.execute(delete(ScanJob).where(ScanJob.ip_range_id == ip_range.id))
+        db.delete(ip_range)
+        db.commit()
+
+        audit.log_event(
+            db,
+            user_id=user.id,
+            request_ip=get_client_ip(request),
+            event_type="RANGE_DELETE",
+            target_type="ip_range",
+            target_id=str(ip_range.id),
+            metadata={"name": ip_range.name},
+        )
+        return RedirectResponse(url="/ranges", status_code=303)
+    finally:
+        db.close()
+
+
+@app.post("/scan/range/{range_id}", response_class=RedirectResponse)
+def scan_start_post(request: Request, range_id: int):
+    db = SessionLocal()
+    try:
+        user = require_user(request, db)
+        if not user:
+            return redirect_to_login()
+
+        ip_range = db.execute(select(IpRange).where(IpRange.id == range_id)).scalar_one_or_none()
+        if not ip_range:
+            return RedirectResponse(url="/ranges", status_code=303)
+
+        spec = ip_range.spec
+        expanded_ips = ip_expansion_count(spec)
+
+        scan_job = ScanJob(
+            ip_range_id=ip_range.id,
+            requested_by_user_id=user.id,
+            request_ip_snapshot=get_client_ip(request),
+            range_name_snapshot=ip_range.name,
+            spec_snapshot=ip_range.spec,
+            status="queued",
+            total_ips=expanded_ips,
+            completed_ips=0,
+            online_ips=0,
+            hash_rate_sum=0.0,
+            error_message=None,
+        )
+        db.add(scan_job)
+        db.commit()
+
+        audit.log_event(
+            db,
+            user_id=user.id,
+            request_ip=get_client_ip(request),
+            event_type="SCAN_START",
+            target_type="scan_job",
+            target_id=str(scan_job.id),
+            metadata={"range_id": ip_range.id, "range_name": ip_range.name, "spec": ip_range.spec, "expanded_ips": expanded_ips},
+        )
+
+        # Start background scanning in a new daemon thread.
+        import threading
+
+        t = threading.Thread(
+            target=run_scan_job_background,
+            args=(scan_job.id,),
+            daemon=True,
+        )
+        t.start()
+
+        return RedirectResponse(url=f"/jobs/{scan_job.id}", status_code=303)
+    finally:
+        db.close()
+
+
+def _device_results_agg_by_c(db: Session, scan_job_id: int) -> list[dict]:
+    row_stmt = (
+        select(
+            DeviceResult.ip_octet_c.label("c"),
+            func.count(DeviceResult.id).label("attempted_count"),
+            func.sum(case((DeviceResult.is_online == True, 1), else_=0)).label("online_count"),
+            func.sum(case((DeviceResult.is_online == True, DeviceResult.mhs_av), else_=0)).label("mhs_sum"),
+        )
+        .where(DeviceResult.scan_job_id == scan_job_id)
+        .group_by(DeviceResult.ip_octet_c)
+        .order_by(DeviceResult.ip_octet_c.asc())
+    )
+    rows = list(db.execute(row_stmt).mappings().all())
+    # Convert values safely for templates (RowMapping is immutable).
+    fixed: list[dict] = []
+    for r in rows:
+        fixed.append(
+            {
+                "c": r["c"],
+                "attempted_count": int(r["attempted_count"] or 0),
+                "online_count": int(r["online_count"] or 0),
+                "mhs_sum": float(r["mhs_sum"] or 0.0),
+            }
+        )
+    return fixed
+
+
+@app.get("/api/jobs/recent", response_class=JSONResponse)
+def api_recent_jobs(request: Request, limit: int = 50):
+    db = SessionLocal()
+    try:
+        user = require_user(request, db)
+        if not user:
+            return JSONResponse({"error": "unauthorized"}, status_code=401)
+
+        limit = max(1, min(int(limit or 50), 200))
+        jobs = list(db.execute(select(ScanJob).order_by(ScanJob.created_at.desc()).limit(limit)).scalars().all())
+        return {
+            "jobs": [
+                {
+                    "id": j.id,
+                    "created_at": j.created_at.isoformat(),
+                    "status": j.status,
+                    "range_name": j.range_name_snapshot,
+                    "total_ips": j.total_ips,
+                    "completed_ips": j.completed_ips,
+                    "online_ips": j.online_ips,
+                    "hash_rate_sum": float(j.hash_rate_sum or 0.0),
+                }
+                for j in jobs
+            ]
+        }
+    finally:
+        db.close()
+
+
+@app.get("/api/jobs/{job_id}/status", response_class=JSONResponse)
+def api_job_status(request: Request, job_id: int):
+    db = SessionLocal()
+    try:
+        user = require_user(request, db)
+        if not user:
+            return JSONResponse({"error": "unauthorized"}, status_code=401)
+
+        j = db.execute(select(ScanJob).where(ScanJob.id == job_id)).scalar_one_or_none()
+        if not j:
+            return JSONResponse({"error": "not_found"}, status_code=404)
+
+        return {
+            "id": j.id,
+            "status": j.status,
+            "created_at": j.created_at.isoformat(),
+            "started_at": j.started_at.isoformat() if j.started_at else None,
+            "finished_at": j.finished_at.isoformat() if j.finished_at else None,
+            "total_ips": j.total_ips,
+            "completed_ips": j.completed_ips,
+            "online_ips": j.online_ips,
+            "hash_rate_sum": float(j.hash_rate_sum or 0.0),
+            "error_message": j.error_message,
+        }
+    finally:
+        db.close()
+
+
+@app.get("/api/jobs/{job_id}/agg_by_c", response_class=JSONResponse)
+def api_job_agg_by_c(request: Request, job_id: int):
+    db = SessionLocal()
+    try:
+        user = require_user(request, db)
+        if not user:
+            return JSONResponse({"error": "unauthorized"}, status_code=401)
+
+        j = db.execute(select(ScanJob).where(ScanJob.id == job_id)).scalar_one_or_none()
+        if not j:
+            return JSONResponse({"error": "not_found"}, status_code=404)
+
+        buckets = _device_results_agg_by_c(db, job_id)
+        return {"job_id": job_id, "buckets": buckets}
+    finally:
+        db.close()
+
+
+@app.get("/api/jobs/errors-trend", response_class=JSONResponse)
+def api_errors_trend(request: Request, limit: int = 50, top: int = 5):
+    """
+    Returns stacked-bar compatible series across recent jobs for top error types.
+    """
+    db = SessionLocal()
+    try:
+        user = require_user(request, db)
+        if not user:
+            return JSONResponse({"error": "unauthorized"}, status_code=401)
+
+        limit = max(1, min(int(limit or 50), 200))
+        top = max(1, min(int(top or 5), 20))
+
+        jobs = list(db.execute(select(ScanJob.id, ScanJob.created_at).order_by(ScanJob.created_at.desc()).limit(limit)).all())
+        job_ids = [int(r[0]) for r in jobs]
+        labels = [r[1].isoformat() for r in jobs][::-1]
+        job_ids_asc = job_ids[::-1]
+
+        if not job_ids:
+            return {"labels": [], "series": []}
+
+        # counts per job_id,error_type
+        counts_rows = list(
+            db.execute(
+                select(DeviceResult.scan_job_id, DeviceResult.error_type, func.count(DeviceResult.id))
+                .where(DeviceResult.scan_job_id.in_(job_ids), DeviceResult.error_type.is_not(None))
+                .group_by(DeviceResult.scan_job_id, DeviceResult.error_type)
+            ).all()
+        )
+
+        total_by_type: dict[str, int] = {}
+        by_job: dict[int, dict[str, int]] = {}
+        for jid, et, cnt in counts_rows:
+            et = str(et)
+            cnt_i = int(cnt)
+            total_by_type[et] = total_by_type.get(et, 0) + cnt_i
+            by_job.setdefault(int(jid), {})[et] = cnt_i
+
+        top_types = [t for t, _ in sorted(total_by_type.items(), key=lambda kv: kv[1], reverse=True)[:top]]
+
+        series = []
+        for et in top_types:
+            series.append(
+                {
+                    "error_type": et,
+                    "counts": [int(by_job.get(jid, {}).get(et, 0)) for jid in job_ids_asc],
+                }
+            )
+
+        return {"labels": labels, "series": series}
+    finally:
+        db.close()
+
+@app.get("/jobs/{job_id}", response_class=HTMLResponse)
+def job_detail_get(request: Request, job_id: int):
+    db = SessionLocal()
+    try:
+        user = require_user(request, db)
+        if not user:
+            return redirect_to_login()
+
+        scan_job = db.execute(select(ScanJob).where(ScanJob.id == job_id)).scalar_one_or_none()
+        if not scan_job:
+            return RedirectResponse(url="/ranges", status_code=303)
+
+        agg_by_c = _device_results_agg_by_c(db, job_id)
+        return templates.TemplateResponse(
+            "jobs.html",
+            {
+                "request": request,
+                "user": user,
+                "scan_job": scan_job,
+                "agg_by_c": agg_by_c,
+            },
+        )
+    finally:
+        db.close()
+
+
+@app.get("/jobs/{job_id}/issues", response_class=HTMLResponse)
+def job_issues_get(request: Request, job_id: int):
+    db = SessionLocal()
+    try:
+        user = require_user(request, db)
+        if not user:
+            return redirect_to_login()
+
+        scan_job = db.execute(select(ScanJob).where(ScanJob.id == job_id)).scalar_one_or_none()
+        if not scan_job:
+            return RedirectResponse(url="/ranges", status_code=303)
+
+        agg_stmt = (
+            select(
+                DeviceResult.error_type.label("error_type"),
+                DeviceResult.stage.label("stage"),
+                func.count(DeviceResult.id).label("count"),
+            )
+            .where(DeviceResult.scan_job_id == job_id, DeviceResult.error_type.is_not(None))
+            .group_by(DeviceResult.error_type, DeviceResult.stage)
+            .order_by(func.count(DeviceResult.id).desc())
+            .limit(50)
+        )
+        agg_rows = list(db.execute(agg_stmt).mappings().all())
+
+        # Pull examples for the top few error buckets.
+        examples: list[dict] = []
+        for bucket in agg_rows[:5]:
+            et = bucket["error_type"]
+            stage = bucket["stage"]
+            ex_stmt = (
+                select(DeviceResult.ip_address, DeviceResult.stage, DeviceResult.error_message, DeviceResult.raw_response)
+                .where(DeviceResult.scan_job_id == job_id, DeviceResult.error_type == et)
+                .order_by(DeviceResult.created_at.desc())
+                .limit(5)
+            )
+            ex_rows = list(db.execute(ex_stmt).mappings().all())
+            examples.append(
+                {
+                    "error_type": et,
+                    "stage": stage,
+                    "count": bucket["count"],
+                    "examples": [
+                        {
+                            "ip": r["ip_address"],
+                            "stage": r["stage"],
+                            "message": (r["error_message"] or "")[:200],
+                            "raw_preview": (r["raw_response"] or "")[:200],
+                        }
+                        for r in ex_rows
+                    ],
+                }
+            )
+
+        return templates.TemplateResponse(
+            "issues.html",
+            {"request": request, "user": user, "scan_job": scan_job, "agg_rows": agg_rows, "examples": examples},
+        )
+    finally:
+        db.close()
+
+
+@app.get("/admin/users", response_class=HTMLResponse)
+def admin_users_get(request: Request):
+    db = SessionLocal()
+    try:
+        user = require_user(request, db)
+        if not user:
+            return redirect_to_login()
+        if not user.is_admin:
+            return redirect_to_login()
+
+        users = list(db.execute(select(User).order_by(User.id.asc())).scalars().all())
+        return templates.TemplateResponse(
+            "admin_users.html", {"request": request, "user": user, "users": users, "error": None}
+        )
+    finally:
+        db.close()
+
+
+@app.post("/admin/users", response_class=HTMLResponse)
+def admin_users_create(
+    request: Request,
+    username: str = Form(...),
+    password: str = Form(...),
+    is_admin: str = Form("off"),
+):
+    db = SessionLocal()
+    try:
+        user = require_user(request, db)
+        if not user:
+            return redirect_to_login()
+        if not user.is_admin:
+            return redirect_to_login()
+
+        username = username.strip()
+        if not username:
+            users = list(db.execute(select(User).order_by(User.id.asc())).scalars().all())
+            return templates.TemplateResponse(
+                "admin_users.html",
+                {"request": request, "user": user, "users": users, "error": "Username required"},
+                status_code=400,
+            )
+
+        # Hashing is handled inline to keep this app minimal.
+        from .auth import hash_password
+
+        password_hash = hash_password(password)
+        new_user = User(
+            username=username,
+            password_hash=password_hash,
+            is_admin=(is_admin == "on"),
+            is_enabled=True,
+        )
+        db.add(new_user)
+        db.commit()
+
+        audit.log_event(
+            db,
+            user_id=user.id,
+            request_ip=get_client_ip(request),
+            event_type="USER_CREATE",
+            target_type="user",
+            target_id=str(new_user.id),
+            metadata={"username": username, "is_admin": new_user.is_admin},
+        )
+
+        return RedirectResponse(url="/admin/users", status_code=303)
+    finally:
+        db.close()
+
+
+@app.post("/admin/users/{user_id}/toggle", response_class=RedirectResponse)
+def admin_user_toggle_enabled(request: Request, user_id: int):
+    db = SessionLocal()
+    try:
+        user = require_user(request, db)
+        if not user or not user.is_admin:
+            return redirect_to_login()
+
+        target = db.execute(select(User).where(User.id == user_id)).scalar_one_or_none()
+        if not target:
+            return RedirectResponse(url="/admin/users", status_code=303)
+
+        # Prevent disabling the last enabled admin.
+        if target.is_admin:
+            enabled_admin_count = db.execute(select(func.count(User.id)).where(User.is_admin == True, User.is_enabled == True)).scalar_one()  # noqa: E712
+            if enabled_admin_count <= 1:
+                return RedirectResponse(url="/admin/users", status_code=303)
+
+        target.is_enabled = not bool(target.is_enabled)
+        db.commit()
+
+        audit.log_event(
+            db,
+            user_id=user.id,
+            request_ip=get_client_ip(request),
+            event_type="USER_TOGGLE_ENABLED",
+            target_type="user",
+            target_id=str(target.id),
+            metadata={"username": target.username, "enabled": target.is_enabled},
+        )
+
+        return RedirectResponse(url="/admin/users", status_code=303)
+    finally:
+        db.close()
+
+
+@app.post("/admin/users/{user_id}/toggle-admin", response_class=RedirectResponse)
+def admin_user_toggle_admin(request: Request, user_id: int):
+    db = SessionLocal()
+    try:
+        user = require_user(request, db)
+        if not user or not user.is_admin:
+            return redirect_to_login()
+
+        target = db.execute(select(User).where(User.id == user_id)).scalar_one_or_none()
+        if not target:
+            return RedirectResponse(url="/admin/users", status_code=303)
+
+        if target.id == user.id:
+            # Prevent removing your own admin privileges by default.
+            return RedirectResponse(url="/admin/users", status_code=303)
+
+        enabled_admin_count = db.execute(select(func.count(User.id)).where(User.is_admin == True, User.is_enabled == True)).scalar_one()  # noqa: E712
+        if target.is_admin and enabled_admin_count <= 1:
+            return RedirectResponse(url="/admin/users", status_code=303)
+
+        target.is_admin = not bool(target.is_admin)
+        db.commit()
+
+        audit.log_event(
+            db,
+            user_id=user.id,
+            request_ip=get_client_ip(request),
+            event_type="USER_TOGGLE_ADMIN",
+            target_type="user",
+            target_id=str(target.id),
+            metadata={"username": target.username, "is_admin": target.is_admin},
+        )
+
+        return RedirectResponse(url="/admin/users", status_code=303)
+    finally:
+        db.close()
+

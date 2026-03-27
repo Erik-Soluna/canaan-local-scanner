@@ -1,0 +1,214 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{{ title or "Canaan A15 Scanner" }}</title>
+    <style>
+      *, *::before, *::after { box-sizing: border-box; }
+      :root {
+        color-scheme: light;
+        --bg: #f0f2f5;
+        --text: #222;
+        --muted: #666;
+        --border: #dde1e6;
+        --card-bg: #fff;
+        --table-border: #e8e8e8;
+        --th-bg: #f5f6f8;
+        --link: #0b5ed7;
+        --btn-bg: #fff;
+        --btn-text: #222;
+      }
+      [data-theme="dark"] {
+        color-scheme: dark;
+        --bg: #0f1115;
+        --text: #e5e7eb;
+        --muted: #9ca3af;
+        --border: #2b3240;
+        --card-bg: #171b22;
+        --table-border: #2b3240;
+        --th-bg: #202632;
+        --link: #7ab7ff;
+        --btn-bg: #202632;
+        --btn-text: #e5e7eb;
+      }
+      body {
+        font-family: Arial, Helvetica, sans-serif;
+        margin: 0;
+        min-height: 100vh;
+        background: var(--bg);
+        color: var(--text);
+      }
+      /* Center content; stop full-bleed tables stretching the whole viewport */
+      .page-shell {
+        max-width: 1100px;
+        margin: 0 auto;
+        padding: 16px 20px 32px;
+      }
+      .nav {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 10px 16px;
+        padding-bottom: 14px;
+        margin-bottom: 16px;
+        border-bottom: 1px solid #dde1e6;
+      }
+      .nav-brand { display: flex; align-items: center; gap: 10px; flex: 0 0 auto; }
+      .nav-links {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 8px 14px;
+        flex: 1 1 auto;
+        justify-content: flex-end;
+      }
+      .nav-links a { white-space: nowrap; }
+      .main-content { width: 100%; min-width: 0; }
+      .muted { color: var(--muted); }
+      .error { color: #b00020; margin-top: 8px; }
+      .main-content > h2 { margin: 0 0 14px; }
+      .card {
+        padding: 14px 16px;
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        margin-top: 14px;
+        background: var(--card-bg);
+        box-shadow: 0 1px 2px rgba(0,0,0,.04);
+      }
+      .main-content > h2 + .card { margin-top: 0; }
+      .card .card {
+        margin-top: 12px;
+        box-shadow: none;
+        border-color: var(--table-border);
+      }
+      .card .card:first-child { margin-top: 0; }
+      /* Flex helpers */
+      .flex { display: flex; }
+      .flex-col { display: flex; flex-direction: column; }
+      .flex-wrap { flex-wrap: wrap; }
+      .items-start { align-items: flex-start; }
+      .items-center { align-items: center; }
+      .justify-between { justify-content: space-between; }
+      .gap-sm { gap: 8px; }
+      .gap-md { gap: 16px; }
+      .gap-lg { gap: 24px; }
+      /* Responsive row: children share space but wrap on narrow screens */
+      .flex-row-responsive {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 16px;
+        align-items: stretch;
+      }
+      .flex-row-responsive > * {
+        flex: 1 1 280px;
+        min-width: 0;
+      }
+      .flex-row-responsive > .card { margin-top: 0; }
+      .table-wrap {
+        overflow-x: auto;
+        width: 100%;
+        max-width: 100%;
+        -webkit-overflow-scrolling: touch;
+      }
+      table { border-collapse: collapse; width: 100%; margin-top: 12px; }
+      th, td { border: 1px solid var(--table-border); padding: 8px 10px; text-align: left; }
+      th { background: var(--th-bg); font-weight: 600; }
+      h2 { font-size: 1.35rem; }
+      h3 { margin: 0 0 10px; font-size: 1.05rem; }
+      label { display: flex; flex-direction: column; gap: 4px; font-size: 0.9rem; }
+      input[type="text"], input[type="password"], select {
+        max-width: 100%;
+        padding: 8px 10px;
+        border: 1px solid #ccc;
+        border-radius: 6px;
+      }
+      .chart-container {
+        position: relative;
+        height: 220px;
+        max-width: 100%;
+        margin-top: 8px;
+      }
+      .form-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 12px 16px;
+        align-items: flex-end;
+      }
+      .form-actions { display: flex; align-items: flex-end; }
+      a { color: var(--link); }
+      button {
+        border: 1px solid var(--border);
+        background: var(--btn-bg);
+        color: var(--btn-text);
+        border-radius: 6px;
+        padding: 7px 10px;
+        cursor: pointer;
+      }
+      #themeToggle { min-width: 90px; }
+    </style>
+  </head>
+  <body>
+    <div class="page-shell">
+      <header class="nav">
+        <div class="nav-brand">
+          <strong>Canaan A15 Scanner</strong>
+          <span class="muted">|</span>
+        </div>
+        <nav class="nav-links" aria-label="Main">
+          {% if user %}
+            <a href="/ranges">Ranges</a>
+            <a href="/jobs">History</a>
+            <a href="/dashboard">Dashboard</a>
+            {% if user.is_admin %}
+              <a href="/admin/users">Admin Users</a>
+            {% endif %}
+            <button type="button" id="themeToggle" aria-label="Toggle color theme">Dark</button>
+            <form method="post" action="/logout" style="margin:0;">
+              <button type="submit">Logout</button>
+            </form>
+          {% else %}
+            <a href="/login">Login</a>
+          {% endif %}
+        </nav>
+      </header>
+      <main class="main-content">
+        {% block content %}{% endblock %}
+      </main>
+    </div>
+    <script>
+      (function () {
+        const root = document.documentElement;
+        const toggle = document.getElementById("themeToggle");
+
+        function preferredTheme() {
+          if (window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches) {
+            return "dark";
+          }
+          return "light";
+        }
+
+        function setTheme(theme) {
+          root.setAttribute("data-theme", theme);
+          if (toggle) {
+            toggle.textContent = theme === "dark" ? "Light" : "Dark";
+          }
+          window.dispatchEvent(new CustomEvent("themechange", { detail: { theme } }));
+        }
+
+        const stored = localStorage.getItem("theme");
+        setTheme(stored || preferredTheme());
+
+        if (toggle) {
+          toggle.addEventListener("click", function () {
+            const current = root.getAttribute("data-theme") || "light";
+            const next = current === "dark" ? "light" : "dark";
+            localStorage.setItem("theme", next);
+            setTheme(next);
+          });
+        }
+      })();
+    </script>
+  </body>
+</html>
+

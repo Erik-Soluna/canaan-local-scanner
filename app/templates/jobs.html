@@ -1,0 +1,113 @@
+{% extends "base.html" %}
+
+{% block content %}
+  {% if scan_job.status != 'completed' %}
+    <meta http-equiv="refresh" content="5">
+  {% endif %}
+
+  <h2>Scan Job: {{ scan_job.range_name_snapshot }} (ID {{ scan_job.id }})</h2>
+
+  <div class="card">
+    <div class="flex-row-responsive">
+      <div class="flex-col gap-sm" style="flex: 2 1 280px;">
+        <div><strong>Status:</strong> <span id="jobStatus">{{ scan_job.status }}</span></div>
+        <div><strong>Progress:</strong> <span id="jobProgress">{{ scan_job.completed_ips }} / {{ scan_job.total_ips }}</span> attempted</div>
+      </div>
+      <div class="flex-col gap-sm" style="flex: 2 1 280px;">
+        <div><strong>Online:</strong> <span id="jobOnline">{{ scan_job.online_ips }}</span></div>
+        <div><strong>Hash Rate Sum (MHS av):</strong> <span id="jobHashSum">{{ scan_job.hash_rate_sum or 0.0 }}</span></div>
+      </div>
+    </div>
+    {% if scan_job.error_message %}
+      <div class="error"><strong>Error:</strong> <span id="jobError">{{ scan_job.error_message }}</span></div>
+    {% else %}
+      <div class="error" style="display:none;"><strong>Error:</strong> <span id="jobError"></span></div>
+    {% endif %}
+  </div>
+
+  <div class="card">
+    <h3>Online Count per Octet Bucket (C)</h3>
+    <div class="muted">Buckets are based on the third octet `C` from your expanded `A.B.C.D` IPs.</div>
+    <div class="table-wrap">
+    <table id="jobAggTable">
+      <thead>
+        <tr>
+          <th>C</th>
+          <th>Attempted</th>
+          <th>Online</th>
+          <th>Hash Rate Sum (MHS av)</th>
+        </tr>
+      </thead>
+      <tbody id="aggTableBody">
+        {% for r in agg_by_c %}
+          <tr>
+            <td style="font-family: monospace;">{{ r.c }}</td>
+            <td>{{ r.attempted_count }}</td>
+            <td>{{ r.online_count }}</td>
+            <td>{{ r.mhs_sum }}</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    </div>
+
+    <div style="margin-top: 12px;">
+      <a href="/jobs/{{ scan_job.id }}/issues">Issues</a>
+    </div>
+  </div>
+
+  <script>
+    // JS is only UI enhancement; page remains usable without it.
+    const JOB_ID = {{ scan_job.id }};
+
+    async function getJson(url) {
+      const res = await fetch(url, { headers: { "Accept": "application/json" } });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      return await res.json();
+    }
+
+    function setText(id, v) {
+      const el = document.getElementById(id);
+      if (el) el.textContent = String(v);
+    }
+
+    async function poll() {
+      try {
+        const s = await getJson(`/api/jobs/${JOB_ID}/status`);
+        setText("jobStatus", s.status);
+        setText("jobProgress", `${s.completed_ips} / ${s.total_ips}`);
+        setText("jobOnline", s.online_ips);
+        setText("jobHashSum", s.hash_rate_sum);
+        if (s.error_message) {
+          const errWrap = document.getElementById("jobError")?.parentElement?.parentElement;
+          if (errWrap) errWrap.style.display = "block";
+          setText("jobError", s.error_message);
+        }
+
+        // If still running, update table by reloading agg_by_c and replacing the tbody.
+        if (s.status === "running" || s.status === "queued") {
+          const agg = await getJson(`/api/jobs/${JOB_ID}/agg_by_c`);
+          const tbody = document.getElementById("aggTableBody");
+          if (tbody && agg && Array.isArray(agg.buckets)) {
+            tbody.innerHTML = agg.buckets.map(b => `
+              <tr>
+                <td style="font-family: monospace;">${b.c}</td>
+                <td>${b.attempted_count}</td>
+                <td>${b.online_count}</td>
+                <td>${b.mhs_sum}</td>
+              </tr>
+            `).join("");
+          }
+        }
+      } catch (e) {
+        // Ignore transient failures.
+        console.warn("poll failed", e);
+      } finally {
+        setTimeout(poll, 3000);
+      }
+    }
+
+    setTimeout(poll, 1500);
+  </script>
+{% endblock %}
+

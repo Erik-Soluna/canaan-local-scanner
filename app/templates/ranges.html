@@ -1,0 +1,64 @@
+{% extends "base.html" %}
+
+{% block content %}
+  <h2>IP Ranges</h2>
+
+  {% if error %}
+    <div class="error">{{ error }}</div>
+  {% endif %}
+
+  <div class="card">
+    <h3>Add Range</h3>
+    <form method="post" action="/ranges" class="flex-col gap-md">
+      <div class="flex-row-responsive">
+        <label>
+          Name
+          <input name="name" type="text" required />
+        </label>
+        <label style="flex: 2 1 320px;">
+          Spec (`A.B.C.D` where octets may be `N` or `N-M`)
+          <input name="spec" type="text" required placeholder="e.g. 10.1.1-8.1-250" />
+        </label>
+      </div>
+      <div><button type="submit">Create</button></div>
+    </form>
+  </div>
+
+  <div class="card">
+    <h3>Existing Ranges</h3>
+    <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Spec</th>
+          <th>Enabled</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in ranges %}
+          <tr>
+            <td>{{ r.name }}</td>
+            <td class="muted" style="font-family: monospace;">{{ r.spec }}</td>
+            <td>{{ "Yes" if r.enabled else "No" }}</td>
+            <td>
+              <form method="post" action="/ranges/{{ r.id }}/toggle" style="display:inline;">
+                <button type="submit">{{ "Disable" if r.enabled else "Enable" }}</button>
+              </form>
+              <a href="/ranges/{{ r.id }}/edit">Edit</a>
+              <form method="post" action="/ranges/{{ r.id }}/delete" style="display:inline;">
+                <button type="submit">Delete</button>
+              </form>
+              <form method="post" action="/scan/range/{{ r.id }}" style="display:inline;">
+                <button type="submit" {% if not r.enabled %}disabled title="Enable this range first"{% endif %}>Run Scan</button>
+              </form>
+            </td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    </div>
+  </div>
+{% endblock %}
+

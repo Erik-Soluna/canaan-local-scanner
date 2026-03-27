@@ -1,0 +1,66 @@
+{% extends "base.html" %}
+
+{% block content %}
+  <h2>Admin Users</h2>
+
+  {% if error %}
+    <div class="error">{{ error }}</div>
+  {% endif %}
+
+  <div class="card">
+    <h3>Create User</h3>
+    <form method="post" action="/admin/users" class="flex-col gap-md">
+      <div class="flex-row-responsive">
+        <label>
+          Username
+          <input name="username" type="text" required />
+        </label>
+        <label>
+          Password
+          <input name="password" type="password" required />
+        </label>
+      </div>
+      <label class="flex" style="flex-direction: row; align-items: center; gap: 8px;">
+        <input type="checkbox" name="is_admin" value="on" />
+        <span>Admin</span>
+      </label>
+      <div><button type="submit">Create</button></div>
+    </form>
+  </div>
+
+  <div class="card">
+    <h3>Existing Users</h3>
+    <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>ID</th>
+          <th>Username</th>
+          <th>Enabled</th>
+          <th>Admin</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for u in users %}
+          <tr>
+            <td>{{ u.id }}</td>
+            <td style="font-family: monospace;">{{ u.username }}</td>
+            <td>{{ "Yes" if u.is_enabled else "No" }}</td>
+            <td>{{ "Yes" if u.is_admin else "No" }}</td>
+            <td>
+              <form method="post" action="/admin/users/{{ u.id }}/toggle" style="display:inline;">
+                <button type="submit">{{ "Disable" if u.is_enabled else "Enable" }}</button>
+              </form>
+              <form method="post" action="/admin/users/{{ u.id }}/toggle-admin" style="display:inline;">
+                <button type="submit">{{ "Revoke Admin" if u.is_admin else "Make Admin" }}</button>
+              </form>
+            </td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    </div>
+  </div>
+{% endblock %}
+

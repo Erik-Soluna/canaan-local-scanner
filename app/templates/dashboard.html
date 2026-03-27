@@ -1,0 +1,187 @@
+{% extends "base.html" %}
+
+{% block content %}
+  <h2>Dashboard</h2>
+
+  <div class="card">
+    <div class="muted">Default view shows last {{ limit }} scan jobs.</div>
+    <div class="flex-row-responsive" style="margin-top: 12px;">
+      <div class="card">
+        <div class="muted">Last Job</div>
+        <div><strong>ID:</strong> {{ last_job.id if last_job else "-" }}</div>
+        <div><strong>Status:</strong> {{ last_job.status if last_job else "-" }}</div>
+        <div><strong>Range:</strong> {{ last_job.range_name_snapshot if last_job else "-" }}</div>
+      </div>
+      <div class="card">
+        <div class="muted">Totals ({{ limit }} jobs)</div>
+        <div><strong>Jobs:</strong> {{ stats.total_jobs }}</div>
+        <div><strong>Completed:</strong> {{ stats.completed_jobs }}</div>
+        <div><strong>Failed:</strong> {{ stats.failed_jobs }}</div>
+      </div>
+      <div class="card">
+        <div class="muted">Averages (completed)</div>
+        <div><strong>Online:</strong> {{ stats.avg_online }}</div>
+        <div><strong>Hash Sum:</strong> {{ stats.avg_hash_sum }}</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h3>Hash-rate Trend (sum of MHS av)</h3>
+    <div class="chart-container"><canvas id="hashTrend"></canvas></div>
+  </div>
+
+  <div class="card">
+    <h3>Errors Trend (top types)</h3>
+    <div class="chart-container"><canvas id="errorsTrend"></canvas></div>
+  </div>
+
+  <div class="card">
+    <h3>Online by C Bucket (last completed job)</h3>
+    {% if last_completed_job_id %}
+      <div class="muted">Job {{ last_completed_job_id }} bucketed by third octet C.</div>
+      <div class="chart-container"><canvas id="onlineByC"></canvas></div>
+    {% else %}
+      <div class="muted">No completed jobs yet.</div>
+    {% endif %}
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+  <script>
+    const LIMIT = {{ limit }};
+    let hashChart = null;
+    let errorsChart = null;
+    let onlineChart = null;
+
+    async function getJson(url) {
+      const res = await fetch(url, { headers: { "Accept": "application/json" } });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      return await res.json();
+    }
+
+    function fmtTs(iso) {
+      try { return new Date(iso).toLocaleString(); } catch { return iso; }
+    }
+
+    function cssVar(name, fallback) {
+      const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+      return v || fallback;
+    }
+
+    function yAxisFromValues(values) {
+      const nums = (values || []).map(v => Number(v)).filter(v => Number.isFinite(v));
+      if (!nums.length) return { beginAtZero: false };
+      let min = Math.min(...nums);
+      let max = Math.max(...nums);
+      if (min === max) {
+        const bump = Math.max(1, Math.abs(min) * 0.1);
+        min -= bump;
+        max += bump;
+      } else {
+        const pad = (max - min) * 0.1;
+        min -= pad;
+        max += pad;
+      }
+      return {
+        beginAtZero: false,
+        suggestedMin: min,
+        suggestedMax: max,
+      };
+    }
+
+    function buildCommonOptions(values) {
+      const gridColor = cssVar("--table-border", "#d1d5db");
+      const tickColor = cssVar("--text", "#222");
+      return {
+        responsive: true,
+        maintainAspectRatio: false,
+        scales: {
+          x: { ticks: { color: tickColor }, grid: { color: gridColor } },
+          y: { ...yAxisFromValues(values), ticks: { color: tickColor }, grid: { color: gridColor } }
+        },
+        plugins: {
+          legend: { labels: { color: tickColor } }
+        }
+      };
+    }
+
+    async function renderHashTrend() {
+      const data = await getJson(`/api/jobs/recent?limit=${LIMIT}`);
+      const labels = data.jobs.map(j => fmtTs(j.created_at));
+      const values = data.jobs.map(j => j.hash_rate_sum || 0);
+      const lineColor = cssVar("--link", "#0b5ed7");
+
+      if (hashChart) hashChart.destroy();
+      hashChart = new Chart(document.getElementById("hashTrend"), {
+        type: "line",
+        data: {
+          labels,
+          datasets: [{
+            label: "Hash Sum (MHS av)",
+            data: values,
+            borderColor: lineColor,
+            backgroundColor: lineColor + "33",
+            tension: 0.2,
+          }]
+        },
+        options: buildCommonOptions(values),
+      });
+    }
+
+    async function renderErrorsTrend() {
+      const data = await getJson(`/api/jobs/errors-trend?limit=${LIMIT}`);
+      const labels = data.labels.map(fmtTs);
+      const datasets = data.series.map(s => ({ label: s.error_type, data: s.counts }));
+      const allValues = datasets.flatMap(d => d.data);
+
+      if (errorsChart) errorsChart.destroy();
+      errorsChart = new Chart(document.getElementById("errorsTrend"), {
+        type: "bar",
+        data: { labels, datasets },
+        options: {
+          ...buildCommonOptions(allValues),
+          scales: {
+            ...buildCommonOptions(allValues).scales,
+            x: { ...buildCommonOptions(allValues).scales.x, stacked: true },
+            y: { ...buildCommonOptions(allValues).scales.y, stacked: true },
+          }
+        }
+      });
+    }
+
+    async function renderOnlineByC(jobId) {
+      const data = await getJson(`/api/jobs/${jobId}/agg_by_c`);
+      const labels = data.buckets.map(b => String(b.c));
+      const values = data.buckets.map(b => b.online_count);
+      const barColor = cssVar("--link", "#0b5ed7");
+
+      if (onlineChart) onlineChart.destroy();
+      onlineChart = new Chart(document.getElementById("onlineByC"), {
+        type: "bar",
+        data: {
+          labels,
+          datasets: [{ label: "Online", data: values, backgroundColor: barColor + "aa" }]
+        },
+        options: buildCommonOptions(values),
+      });
+    }
+
+    async function renderAll() {
+      try {
+        await renderHashTrend();
+        await renderErrorsTrend();
+        {% if last_completed_job_id %}
+          await renderOnlineByC({{ last_completed_job_id }});
+        {% endif %}
+      } catch (e) {
+        console.error("Dashboard render failed", e);
+      }
+    }
+
+    (async () => { await renderAll(); })();
+    window.addEventListener("themechange", async () => {
+      await renderAll();
+    });
+  </script>
+{% endblock %}
+
