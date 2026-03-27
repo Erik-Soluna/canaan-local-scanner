@@ -35,6 +35,9 @@ services:
       - GITHUB_TOKEN=${GITHUB_TOKEN:-}
       - GITHUB_REPO=${GITHUB_REPO:-Erik-Soluna/canaan-local-scanner}
       - GITHUB_UPDATE_CACHE_TTL_S=${GITHUB_UPDATE_CACHE_TTL_S:-600}
+      # Optional: Settings "Trigger deploy" (admin)
+      - DEPLOY_WEBHOOK_URL=${DEPLOY_WEBHOOK_URL:-}
+      - DEPLOY_WEBHOOK_SECRET=${DEPLOY_WEBHOOK_SECRET:-}
     volumes:
       - ./data:/data
     healthcheck:

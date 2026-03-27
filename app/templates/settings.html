@@ -16,6 +16,15 @@
     <div id="updateStatusBox" class="card" style="margin-top:14px;display:none;border-color:#f59e0b;">
       <strong>Update available</strong>
       <p id="updateStatusText" class="muted" style="margin:8px 0 0;"></p>
+      {% if user.is_admin %}
+      <div id="deployTriggerRow" class="form-actions" style="margin-top:12px;display:none;">
+        <button type="button" id="btnTriggerDeploy">Trigger deploy</button>
+        <span id="deployTriggerStatus" class="muted" style="margin-left:8px;"></span>
+      </div>
+      <p id="deployTriggerHint" class="muted" style="margin-top:8px;display:none;font-size:0.9rem;">
+        Calls <code>DEPLOY_WEBHOOK_URL</code> on the server (e.g. CI or your host). Configure env and redeploy once to enable.
+      </p>
+      {% endif %}
     </div>
     <div id="updateOkBox" class="muted" style="margin-top:12px;"></div>
     <div id="updateErrBox" class="error" style="margin-top:8px;display:none;"></div>
@@ -31,6 +40,10 @@
       const text = document.getElementById("updateStatusText");
       const jsonPre = document.getElementById("updateJson");
       const link = document.getElementById("linkCommits");
+      const deployRow = document.getElementById("deployTriggerRow");
+      const btnDeploy = document.getElementById("btnTriggerDeploy");
+      const deployStatus = document.getElementById("deployTriggerStatus");
+      const deployHint = document.getElementById("deployTriggerHint");
 
       function showErr(msg) {
         errBox.style.display = "block";
@@ -61,9 +74,15 @@
           okBox.textContent = "Deployed " + ds + " — GitHub main " + gs + (d.github_error ? " (GitHub note: " + d.github_error + ")" : "");
           if (d.update_available) {
             banner.style.display = "block";
-            text.textContent = "A newer revision exists on main (" + gs + "). Pull and redeploy to update.";
+            text.textContent = "A newer revision exists on main (" + gs + "). Pull and redeploy to update, or use Trigger deploy if a webhook is configured.";
+            if (deployRow) {
+              deployRow.style.display = "flex";
+              if (deployStatus) deployStatus.textContent = "";
+              if (deployHint) deployHint.style.display = "none";
+            }
           } else {
             banner.style.display = "none";
+            if (deployRow) deployRow.style.display = "none";
           }
         } catch (e) {
           okBox.textContent = "";
@@ -73,6 +92,37 @@
 
       document.getElementById("btnCheckCached").addEventListener("click", function () { load(false); });
       document.getElementById("btnCheckFresh").addEventListener("click", function () { load(true); });
+      if (btnDeploy) {
+        btnDeploy.addEventListener("click", async function () {
+          hideErr();
+          if (deployStatus) deployStatus.textContent = "Calling deploy webhook…";
+          if (deployHint) deployHint.style.display = "none";
+          try {
+            const r = await fetch("/api/trigger-deploy", {
+              method: "POST",
+              headers: { Accept: "application/json" },
+              credentials: "same-origin",
+            });
+            const d = await r.json();
+            if (r.status === 503 && d.error === "not_configured") {
+              if (deployStatus) deployStatus.textContent = "";
+              if (deployHint) deployHint.style.display = "block";
+              showErr(d.message || "Webhook not configured.");
+              return;
+            }
+            if (!r.ok) {
+              if (deployStatus) deployStatus.textContent = "";
+              showErr(d.message || d.error || ("HTTP " + r.status));
+              return;
+            }
+            if (deployStatus) deployStatus.textContent = "Webhook accepted (HTTP " + (d.http_status || "?") + ").";
+            await load(true);
+          } catch (e) {
+            if (deployStatus) deployStatus.textContent = "";
+            showErr(String(e));
+          }
+        });
+      }
       load(false);
     })();
   </script>

@@ -93,3 +93,35 @@ def build_update_payload(deployed_sha: str, *, force_refresh: bool = False) -> d
         "github_error": gh_err,
         "html_url": html_url,
     }
+
+
+def trigger_deploy_webhook() -> tuple[bool, int | None, str | None]:
+    """POST to ``DEPLOY_WEBHOOK_URL`` (optional ``DEPLOY_WEBHOOK_SECRET`` as Bearer).
+
+    Returns ``(success, http_status, error_message)``. If the URL is unset,
+    returns ``(False, None, "not_configured")``.
+    """
+    url = os.getenv("DEPLOY_WEBHOOK_URL", "").strip()
+    if not url:
+        return False, None, "not_configured"
+    secret = os.getenv("DEPLOY_WEBHOOK_SECRET", "").strip()
+    body = b"{}"
+    req = urllib.request.Request(url, data=body, method="POST")
+    req.add_header("Content-Type", "application/json")
+    req.add_header("Accept", "application/json")
+    if secret:
+        req.add_header("Authorization", f"Bearer {secret}")
+    try:
+        with urllib.request.urlopen(req, timeout=120) as resp:
+            return True, int(resp.getcode()), None
+    except urllib.error.HTTPError as e:
+        detail = e.reason or str(e.code)
+        try:
+            body = e.read().decode("utf-8", errors="replace")[:500]
+            if body.strip():
+                detail = body
+        except OSError:
+            pass
+        return False, int(e.code), detail
+    except OSError as e:
+        return False, None, str(e)

@@ -19,7 +19,7 @@ from .db import ENGINE, SessionLocal
 from .models import DeviceResult, IpRange, ScanJob, User
 from .parsing import format_hash_rate_mhs
 from .scanner import ip_expansion_count, run_scan_job_background
-from .update_check import build_update_payload, get_deploy_sha
+from .update_check import build_update_payload, get_deploy_sha, trigger_deploy_webhook
 
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -667,6 +667,71 @@ def api_update_status(request: Request, refresh: bool = Query(False)):
             return JSONResponse({"error": "unauthorized"}, status_code=401)
         deployed = get_deploy_sha(BASE_DIR)
         return build_update_payload(deployed, force_refresh=refresh)
+    finally:
+        db.close()
+
+
+@app.post("/api/trigger-deploy", response_class=JSONResponse)
+def api_trigger_deploy(request: Request):
+    """Admin-only: POST optional ``DEPLOY_WEBHOOK_URL`` when GitHub main is ahead of this deploy."""
+    db = SessionLocal()
+    try:
+        user = require_user(request, db)
+        if not user:
+            return JSONResponse({"error": "unauthorized"}, status_code=401)
+        if not user.is_admin:
+            return JSONResponse({"error": "forbidden"}, status_code=403)
+
+        deployed = get_deploy_sha(BASE_DIR)
+        payload = build_update_payload(deployed, force_refresh=True)
+        if not payload.get("update_available"):
+            return JSONResponse(
+                {
+                    "ok": False,
+                    "error": "no_update",
+                    "message": "No update is available according to GitHub main.",
+                },
+                status_code=409,
+            )
+
+        ok, http_status, err = trigger_deploy_webhook()
+        if err == "not_configured":
+            return JSONResponse(
+                {
+                    "ok": False,
+                    "error": "not_configured",
+                    "message": "Set DEPLOY_WEBHOOK_URL (and optional DEPLOY_WEBHOOK_SECRET) on the server to enable this button.",
+                },
+                status_code=503,
+            )
+        if not ok:
+            return JSONResponse(
+                {
+                    "ok": False,
+                    "error": "webhook_failed",
+                    "message": err or "webhook request failed",
+                    "http_status": http_status,
+                },
+                status_code=502,
+            )
+
+        audit.log_event(
+            db,
+            user_id=user.id,
+            request_ip=get_client_ip(request),
+            event_type="DEPLOY_TRIGGER",
+            target_type="deploy",
+            target_id=(payload.get("github_sha") or "")[:40],
+            metadata={"http_status": http_status, "github_sha": payload.get("github_sha")},
+        )
+        return JSONResponse(
+            {
+                "ok": True,
+                "message": "Deploy webhook accepted.",
+                "http_status": http_status,
+                "github_sha": payload.get("github_sha"),
+            }
+        )
     finally:
         db.close()
 
