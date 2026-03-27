@@ -1,12 +1,15 @@
 from __future__ import annotations
 
+import io
 import os
+import zipfile
+from datetime import datetime, timezone
 from pathlib import Path
 
-from fastapi import FastAPI, Form, Request
-from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
+from fastapi import FastAPI, Form, HTTPException, Request
+from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse, StreamingResponse
 from fastapi.templating import Jinja2Templates
-from sqlalchemy import case, func, select, delete
+from sqlalchemy import case, func, or_, select, delete, and_
 from sqlalchemy.orm import Session
 from starlette.middleware.sessions import SessionMiddleware
 
@@ -14,12 +17,16 @@ from . import audit
 from .auth import create_initial_admin_if_missing, get_current_user, verify_password
 from .db import ENGINE, SessionLocal
 from .models import DeviceResult, IpRange, ScanJob, User
+from .parsing import format_hash_rate_mhs
 from .scanner import ip_expansion_count, run_scan_job_background
 
 
 BASE_DIR = Path(__file__).resolve().parent
 TEMPLATES_DIR = BASE_DIR / "templates"
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
+templates.env.filters["hash_rate"] = format_hash_rate_mhs
+
+DEBUG_EXPORT_MAX_BYTES = int(os.getenv("DEBUG_EXPORT_MAX_BYTES", str(50 * 1024 * 1024)))
 
 
 def get_client_ip(request: Request) -> str:
@@ -202,6 +209,8 @@ def dashboard_get(request: Request, limit: int = 50):
             "avg_hash_sum": avg([float(j.hash_rate_sum or 0.0) for j in completed_jobs]),
         }
 
+        admin_jobs = recent_jobs if user.is_admin else []
+
         return templates.TemplateResponse(
             "dashboard.html",
             {
@@ -211,6 +220,7 @@ def dashboard_get(request: Request, limit: int = 50):
                 "last_job": last_job,
                 "last_completed_job_id": last_completed.id if last_completed else None,
                 "stats": stats,
+                "admin_jobs": admin_jobs,
             },
         )
     finally:
@@ -687,6 +697,110 @@ def job_issues_get(request: Request, job_id: int):
         db.close()
 
 
+
+@app.get("/admin/debug/export")
+def admin_debug_export(
+    request: Request,
+    job_id: int | None = None,
+    mode: str = "errors_only",
+):
+    db = SessionLocal()
+    try:
+        user = require_user(request, db)
+        if not user or not user.is_admin:
+            return redirect_to_login()
+
+        mode_norm = (mode or "errors_only").strip().lower()
+        if mode_norm not in ("errors_only", "all"):
+            mode_norm = "errors_only"
+
+        if job_id is None:
+            last_c = db.execute(
+                select(ScanJob)
+                .where(ScanJob.status == "completed")
+                .order_by(ScanJob.id.desc())
+                .limit(1)
+            ).scalar_one_or_none()
+            if not last_c:
+                last_c = db.execute(select(ScanJob).order_by(ScanJob.id.desc()).limit(1)).scalar_one_or_none()
+            if not last_c:
+                raise HTTPException(status_code=404, detail="No scan jobs found.")
+            job_id = last_c.id
+
+        job = db.execute(select(ScanJob).where(ScanJob.id == job_id)).scalar_one_or_none()
+        if not job:
+            raise HTTPException(status_code=404, detail="Job not found.")
+
+        stmt = select(DeviceResult).where(DeviceResult.scan_job_id == job_id).order_by(DeviceResult.ip_address.asc())
+        if mode_norm == "errors_only":
+            stmt = stmt.where(
+                or_(
+                    DeviceResult.error_type.is_not(None),
+                    and_(DeviceResult.error_message.is_not(None), DeviceResult.error_message != ""),
+                )
+            )
+        rows = list(db.execute(stmt).scalars().all())
+
+        buf = io.BytesIO()
+        total_bytes = 0
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        zip_name = f"canaan-debug-job-{job_id}-{stamp}.zip"
+
+        readme_lines = [
+            f"scan_job_id={job.id}",
+            f"range_name={job.range_name_snapshot}",
+            f"spec={job.spec_snapshot}",
+            f"status={job.status}",
+            f"total_ips={job.total_ips}",
+            f"completed_ips={job.completed_ips}",
+            f"online_ips={job.online_ips}",
+            f"hash_rate_sum_mhs={job.hash_rate_sum}",
+            f"export_mode={mode_norm}",
+            f"device_files={len(rows)}",
+        ]
+        readme_body = "\n".join(readme_lines) + "\n"
+
+        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+            zf.writestr("README.txt", readme_body)
+            total_bytes += len(readme_body.encode("utf-8"))
+
+            for dr in rows:
+                ip_safe = dr.ip_address.replace(":", "_").replace("/", "_")
+                head = (
+                    f"ip={dr.ip_address}\n"
+                    f"online={dr.is_online}\n"
+                    f"mhs_av={dr.mhs_av}\n"
+                    f"error_type={dr.error_type}\n"
+                    f"stage={dr.stage}\n"
+                    f"error_message={dr.error_message}\n\n"
+                )
+                body = dr.raw_response or "(no raw_response stored)\n"
+                content = head + body
+                b = content.encode("utf-8")
+                total_bytes += len(b)
+                if total_bytes > DEBUG_EXPORT_MAX_BYTES:
+                    raise HTTPException(
+                        status_code=413,
+                        detail=f"Export exceeds limit of {DEBUG_EXPORT_MAX_BYTES} bytes; try errors_only or a smaller job.",
+                    )
+                zf.writestr(f"devices/{ip_safe}.txt", content)
+
+        audit.log_event(
+            db,
+            user_id=user.id,
+            request_ip=get_client_ip(request),
+            event_type="DEBUG_EXPORT",
+            target_type="scan_job",
+            target_id=str(job_id),
+            metadata={"mode": mode_norm, "file_count": len(rows)},
+        )
+
+        buf.seek(0)
+        headers = {"Content-Disposition": f'attachment; filename="{zip_name}"'}
+        return StreamingResponse(buf, media_type="application/zip", headers=headers)
+    finally:
+        db.close()
+
 @app.get("/admin/users", response_class=HTMLResponse)
 def admin_users_get(request: Request):
     db = SessionLocal()
@@ -829,4 +943,5 @@ def admin_user_toggle_admin(request: Request, user_id: int):
         return RedirectResponse(url="/admin/users", status_code=303)
     finally:
         db.close()
+
 

@@ -1,8 +1,48 @@
 from __future__ import annotations
 
+import math
 import re
 from dataclasses import dataclass
 from typing import Any
+
+_HASH_RATE_UNITS: tuple[str, ...] = ("MH/s", "GH/s", "TH/s", "PH/s", "EH/s")
+
+
+def format_hash_rate_mhs(mhs: float | None) -> str:
+    """Format a value in MH/s using the largest unit where the number is >= 1."""
+    if mhs is None:
+        return "\u2014"
+    try:
+        v = float(mhs)
+    except (TypeError, ValueError):
+        return "\u2014"
+    if not math.isfinite(v):
+        return "\u2014"
+    if v == 0:
+        return "0 MH/s"
+    power = 0
+    for p in range(4, -1, -1):
+        if v / (1000**p) >= 1.0:
+            power = p
+            break
+    scaled = v / (1000**power)
+    s = f"{scaled:.10f}".rstrip("0").rstrip(".")
+    return f"{s} {_HASH_RATE_UNITS[power]}"
+
+
+def hash_rate_chart_scale(mhs_values: list[float]) -> tuple[int, str]:
+    """Pick a single SI unit for a chart from the max MH/s in the series."""
+    if not mhs_values:
+        return 0, _HASH_RATE_UNITS[0]
+    m = max(float(x or 0.0) for x in mhs_values)
+    if not math.isfinite(m) or m <= 0:
+        return 0, _HASH_RATE_UNITS[0]
+    power = 0
+    for p in range(4, -1, -1):
+        if m / (1000**p) >= 1.0:
+            power = p
+            break
+    return power, _HASH_RATE_UNITS[0]
 
 
 STATUS_LINE_RE = re.compile(
@@ -129,4 +169,3 @@ def parse_fans_from_msg(description_msg: str) -> dict[str, Any]:
         "fan1": grab("Fan1"),
         "fanr": grab("FanR"),
     }
-

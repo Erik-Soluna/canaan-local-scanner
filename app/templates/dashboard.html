@@ -21,13 +21,39 @@
       <div class="card">
         <div class="muted">Averages (completed)</div>
         <div><strong>Online:</strong> {{ stats.avg_online }}</div>
-        <div><strong>Hash Sum:</strong> {{ stats.avg_hash_sum }}</div>
+        <div><strong>Hash sum:</strong> {{ stats.avg_hash_sum | hash_rate }}</div>
       </div>
     </div>
   </div>
 
+  {% if user.is_admin and admin_jobs %}
   <div class="card">
-    <h3>Hash-rate Trend (sum of MHS av)</h3>
+    <h3>Admin — Debug export</h3>
+    <p class="muted">Download raw per-device responses (stored TCP/API text) as a ZIP for troubleshooting.</p>
+    <form method="get" action="/admin/debug/export" class="form-row">
+      <label>
+        Job
+        <select name="job_id">
+          {% for j in admin_jobs %}
+            <option value="{{ j.id }}" {% if last_completed_job_id and j.id == last_completed_job_id %}selected{% endif %}>#{{ j.id }} — {{ j.range_name_snapshot }} ({{ j.status }})</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label>
+        Mode
+        <select name="mode">
+          <option value="errors_only" selected>Errors only (smaller)</option>
+          <option value="all">All devices</option>
+        </select>
+      </label>
+      <div class="form-actions"><button type="submit">Download ZIP</button></div>
+    </form>
+  </div>
+  {% endif %}
+
+  <div class="card">
+    <h3>Hash-rate trend</h3>
+    <div class="muted">Axis uses one SI unit from the largest job total in this window (stored values are MHS av sums).</div>
     <div class="chart-container"><canvas id="hashTrend"></canvas></div>
   </div>
 
@@ -52,6 +78,32 @@
     let hashChart = null;
     let errorsChart = null;
     let onlineChart = null;
+
+    const HASH_UNITS = ["MH/s", "GH/s", "TH/s", "PH/s", "EH/s"];
+
+    function formatHashRateMhs(mhs) {
+      if (mhs == null || !Number.isFinite(mhs)) return "\u2014";
+      if (mhs === 0) return "0 MH/s";
+      let power = 0;
+      for (let p = 4; p >= 0; p--) {
+        if (mhs / Math.pow(1000, p) >= 1) { power = p; break; }
+      }
+      const scaled = mhs / Math.pow(1000, power);
+      let s = scaled.toFixed(10).replace(/\.?0+$/, "");
+      return s + " " + HASH_UNITS[power];
+    }
+
+    function hashRateChartScale(values) {
+      const nums = (values || []).map(v => Number(v)).filter(v => Number.isFinite(v));
+      if (!nums.length) return { power: 0, unit: "MH/s" };
+      const m = Math.max(...nums);
+      if (!Number.isFinite(m) || m <= 0) return { power: 0, unit: "MH/s" };
+      let power = 0;
+      for (let p = 4; p >= 0; p--) {
+        if (m / Math.pow(1000, p) >= 1) { power = p; break; }
+      }
+      return { power, unit: HASH_UNITS[power] };
+    }
 
     async function getJson(url) {
       const res = await fetch(url, { headers: { "Accept": "application/json" } });
@@ -108,8 +160,11 @@
     async function renderHashTrend() {
       const data = await getJson(`/api/jobs/recent?limit=${LIMIT}`);
       const labels = data.jobs.map(j => fmtTs(j.created_at));
-      const values = data.jobs.map(j => j.hash_rate_sum || 0);
+      const rawValues = data.jobs.map(j => j.hash_rate_sum || 0);
+      const scale = hashRateChartScale(rawValues);
+      const scaledValues = rawValues.map(v => v / Math.pow(1000, scale.power));
       const lineColor = cssVar("--link", "#0b5ed7");
+      const baseOpts = buildCommonOptions(scaledValues);
 
       if (hashChart) hashChart.destroy();
       hashChart = new Chart(document.getElementById("hashTrend"), {
@@ -117,14 +172,31 @@
         data: {
           labels,
           datasets: [{
-            label: "Hash Sum (MHS av)",
-            data: values,
+            label: "Hash sum (" + scale.unit + ")",
+            data: scaledValues,
             borderColor: lineColor,
             backgroundColor: lineColor + "33",
             tension: 0.2,
           }]
         },
-        options: buildCommonOptions(values),
+        options: {
+          ...baseOpts,
+          scales: {
+            ...baseOpts.scales,
+            y: {
+              ...baseOpts.scales.y,
+              title: { display: true, text: scale.unit, color: cssVar("--text", "#222") },
+            },
+          },
+          plugins: {
+            ...baseOpts.plugins,
+            tooltip: {
+              callbacks: {
+                label: (ctx) => "Hash: " + formatHashRateMhs(rawValues[ctx.dataIndex]),
+              },
+            },
+          },
+        },
       });
     }
 
@@ -184,4 +256,6 @@
     });
   </script>
 {% endblock %}
+
+
 

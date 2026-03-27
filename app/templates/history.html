@@ -59,7 +59,7 @@
             <td style="font-family: monospace;">{{ j.status }}</td>
             <td>{{ j.completed_ips }} / {{ j.total_ips }}</td>
             <td>{{ j.online_ips }}</td>
-            <td>{{ j.hash_rate_sum or 0.0 }}</td>
+            <td>{{ (j.hash_rate_sum or 0.0) | hash_rate }}</td>
             <td>
               <a href="/jobs/{{ j.id }}">View</a>
               |
