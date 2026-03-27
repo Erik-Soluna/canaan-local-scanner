@@ -1,0 +1,89 @@
+{% extends "base.html" %}
+
+{% block content %}
+  <h2>Devices — Job {{ scan_job.id }} ({{ scan_job.range_name_snapshot }})</h2>
+  <p class="muted"><a href="/jobs/{{ scan_job.id }}">Back to job summary</a></p>
+
+  <div class="card">
+    <h3>Filters</h3>
+    <div class="form-row">
+      <label>C (third octet)
+        <select id="fC">
+          <option value="">Any</option>
+          {% for c in c_list %}
+            <option value="{{ c }}">{{ c }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label>Online
+        <select id="fOnline">
+          <option value="">Any</option>
+          <option value="true">Online</option>
+          <option value="false">Offline</option>
+        </select>
+      </label>
+      <label>IP prefix <input type="text" id="fQ" placeholder="10.1." style="width:140px" /></label>
+      <label style="display:flex;align-items:center;gap:6px;"><input type="checkbox" id="fErrors" /> Errors only</label>
+      <label>Page size
+        <select id="fPageSize"><option value="50">50</option><option value="100">100</option><option value="200">200</option></select>
+      </label>
+      <div class="form-actions"><button type="button" id="btnApply">Apply</button></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h3>Machines</h3>
+    <p class="muted" id="metaLine">Loading…</p>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>IP</th><th>Online</th><th>Hash rate</th><th>Model</th><th>Product</th><th>API</th><th>Error</th><th></th>
+          </tr>
+        </thead>
+        <tbody id="tbody"></tbody>
+      </table>
+    </div>
+    <div class="form-row" style="margin-top:12px;">
+      <button type="button" id="btnPrev">Previous</button>
+      <span id="pageLabel" class="muted"></span>
+      <button type="button" id="btnNext">Next</button>
+    </div>
+  </div>
+
+  <script>
+    const JOB_ID = {{ scan_job.id }};
+    let page = 1;
+    function esc(s) {
+      const d = document.createElement("div");
+      d.textContent = s == null ? "" : String(s);
+      return d.innerHTML;
+    }
+    async function load() {
+      const params = new URLSearchParams({ page: String(page), page_size: document.getElementById("fPageSize").value });
+      const c = document.getElementById("fC").value;
+      if (c) params.set("c", c);
+      const o = document.getElementById("fOnline").value;
+      if (o) params.set("online", o);
+      const q = document.getElementById("fQ").value.trim();
+      if (q) params.set("q", q);
+      if (document.getElementById("fErrors").checked) params.set("errors_only", "true");
+      const res = await fetch("/api/jobs/" + JOB_ID + "/devices?" + params.toString(), { headers: { "Accept": "application/json" } });
+      if (!res.ok) { document.getElementById("metaLine").textContent = "Failed (" + res.status + ")"; return; }
+      const data = await res.json();
+      const total = data.total;
+      const start = total === 0 ? 0 : (data.page - 1) * data.page_size + 1;
+      const end = Math.min(total, data.page * data.page_size);
+      document.getElementById("metaLine").textContent = total + " device(s) — showing " + start + "–" + end;
+      document.getElementById("pageLabel").textContent = "Page " + data.page;
+      document.getElementById("tbody").innerHTML = (data.rows || []).map(function (r) {
+        var u = "/jobs/" + JOB_ID + "/device?ip=" + encodeURIComponent(r.ip_address);
+        return "<tr><td style=\"font-family:monospace\">" + esc(r.ip_address) + "</td><td>" + (r.is_online ? "yes" : "no") + "</td><td>" + esc(r.mhs_av_formatted) + "</td><td>" + esc(r.model || "") + "</td><td>" + esc(r.prod || "") + "</td><td>" + esc(r.api_version || "") + "</td><td style=\"max-width:200px;overflow:hidden;text-overflow:ellipsis\">" + esc(r.error_type || "") + "</td><td><a href=\"" + u + "\">Details</a></td></tr>";
+      }).join("");
+    }
+    document.getElementById("btnApply").addEventListener("click", function () { page = 1; load(); });
+    document.getElementById("btnPrev").addEventListener("click", function () { if (page > 1) { page--; load(); } });
+    document.getElementById("btnNext").addEventListener("click", function () { page++; load(); });
+    load();
+  </script>
+{% endblock %}

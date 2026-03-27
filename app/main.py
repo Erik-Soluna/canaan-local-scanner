@@ -6,7 +6,7 @@ import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
 
-from fastapi import FastAPI, Form, HTTPException, Request
+from fastapi import FastAPI, Form, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse, StreamingResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy import case, func, or_, select, delete, and_
@@ -19,6 +19,7 @@ from .db import ENGINE, SessionLocal
 from .models import DeviceResult, IpRange, ScanJob, User
 from .parsing import format_hash_rate_mhs
 from .scanner import ip_expansion_count, run_scan_job_background
+from .update_check import build_update_payload, get_deploy_sha
 
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -614,8 +615,193 @@ def api_errors_trend(request: Request, limit: int = 50, top: int = 5):
     finally:
         db.close()
 
+
+def _devices_where(
+    job_id: int,
+    c: int | None,
+    online: bool | None,
+    q: str | None,
+    errors_only: bool,
+):
+    parts: list = [DeviceResult.scan_job_id == job_id]
+    if c is not None:
+        parts.append(DeviceResult.ip_octet_c == c)
+    if online is True:
+        parts.append(DeviceResult.is_online == True)  # noqa: E712
+    elif online is False:
+        parts.append(DeviceResult.is_online == False)  # noqa: E712
+    if q and q.strip():
+        parts.append(DeviceResult.ip_address.like(f"{q.strip()}%"))
+    if errors_only:
+        parts.append(
+            or_(
+                DeviceResult.error_type.is_not(None),
+                and_(DeviceResult.error_message.is_not(None), DeviceResult.error_message != ""),
+            )
+        )
+    return and_(*parts)
+
+
+@app.get("/api/update-status", response_class=JSONResponse)
+def api_update_status(request: Request):
+    db = SessionLocal()
+    try:
+        user = require_user(request, db)
+        if not user:
+            return JSONResponse({"error": "unauthorized"}, status_code=401)
+        deployed = get_deploy_sha(BASE_DIR)
+        return build_update_payload(deployed)
+    finally:
+        db.close()
+
+
+@app.get("/api/jobs/{job_id}/devices", response_class=JSONResponse)
+def api_job_devices(
+    request: Request,
+    job_id: int,
+    page: int = 1,
+    page_size: int = 50,
+    c: int | None = None,
+    online: str | None = None,
+    q: str | None = None,
+    errors_only: bool = False,
+):
+    db = SessionLocal()
+    try:
+        user = require_user(request, db)
+        if not user:
+            return JSONResponse({"error": "unauthorized"}, status_code=401)
+        j = db.execute(select(ScanJob).where(ScanJob.id == job_id)).scalar_one_or_none()
+        if not j:
+            return JSONResponse({"error": "not_found"}, status_code=404)
+
+        page = max(1, int(page or 1))
+        page_size = max(1, min(int(page_size or 50), 200))
+        online_bool = None
+        if online in ("true", "1", "yes"):
+            online_bool = True
+        elif online in ("false", "0", "no"):
+            online_bool = False
+
+        where_clause = _devices_where(job_id, c, online_bool, q, errors_only)
+        total = db.execute(select(func.count(DeviceResult.id)).where(where_clause)).scalar_one()
+        total_i = int(total or 0)
+
+        stmt = (
+            select(DeviceResult)
+            .where(where_clause)
+            .order_by(DeviceResult.ip_address.asc())
+            .offset((page - 1) * page_size)
+            .limit(page_size)
+        )
+        rows = list(db.execute(stmt).scalars().all())
+        out = []
+        for dr in rows:
+            out.append(
+                {
+                    "ip_address": dr.ip_address,
+                    "is_online": dr.is_online,
+                    "mhs_av": float(dr.mhs_av) if dr.mhs_av is not None else None,
+                    "mhs_av_formatted": format_hash_rate_mhs(dr.mhs_av),
+                    "model": dr.model,
+                    "prod": dr.prod,
+                    "hwtype": dr.hwtype,
+                    "device_version": dr.device_version,
+                    "api_version": dr.api_version,
+                    "error_type": dr.error_type,
+                    "stage": dr.stage,
+                    "error_message": ((dr.error_message or "")[:500] if dr.error_message else None),
+                }
+            )
+
+        return {
+            "job_id": job_id,
+            "page": page,
+            "page_size": page_size,
+            "total": total_i,
+            "rows": out,
+        }
+    finally:
+        db.close()
+
+
+@app.get("/jobs/{job_id}/devices", response_class=HTMLResponse)
+def job_devices_list_get(request: Request, job_id: int):
+    db = SessionLocal()
+    try:
+        user = require_user(request, db)
+        if not user:
+            return redirect_to_login()
+        scan_job = db.execute(select(ScanJob).where(ScanJob.id == job_id)).scalar_one_or_none()
+        if not scan_job:
+            return RedirectResponse(url="/ranges", status_code=303)
+        c_rows = db.execute(
+            select(DeviceResult.ip_octet_c)
+            .where(DeviceResult.scan_job_id == job_id)
+            .distinct()
+            .order_by(DeviceResult.ip_octet_c.asc())
+        ).all()
+        c_list = [int(r[0]) for r in c_rows]
+        return templates.TemplateResponse(
+            "devices_list.html",
+            {"request": request, "user": user, "scan_job": scan_job, "c_list": c_list},
+        )
+    finally:
+        db.close()
+
+
+@app.get("/jobs/{job_id}/device", response_class=HTMLResponse)
+def job_device_detail_get(request: Request, job_id: int, ip: str = Query(..., min_length=1)):
+    db = SessionLocal()
+    try:
+        user = require_user(request, db)
+        if not user:
+            return redirect_to_login()
+        ip = ip.strip()
+        scan_job = db.execute(select(ScanJob).where(ScanJob.id == job_id)).scalar_one_or_none()
+        if not scan_job:
+            return RedirectResponse(url="/ranges", status_code=303)
+        dr = db.execute(
+            select(DeviceResult).where(
+                DeviceResult.scan_job_id == job_id,
+                DeviceResult.ip_address == ip,
+            )
+        ).scalar_one_or_none()
+        if not dr:
+            return templates.TemplateResponse(
+                "device_detail.html",
+                {
+                    "request": request,
+                    "user": user,
+                    "scan_job": scan_job,
+                    "device": None,
+                    "missing_ip": ip,
+                },
+                status_code=404,
+            )
+        raw = dr.raw_response or ""
+        raw_preview_len = 12000
+        raw_truncated = len(raw) > raw_preview_len
+        raw_show = raw[:raw_preview_len] if raw_truncated else raw
+        return templates.TemplateResponse(
+            "device_detail.html",
+            {
+                "request": request,
+                "user": user,
+                "scan_job": scan_job,
+                "device": dr,
+                "raw_show": raw_show,
+                "raw_truncated": raw_truncated,
+                "missing_ip": None,
+            },
+        )
+    finally:
+        db.close()
+
+
 @app.get("/jobs/{job_id}", response_class=HTMLResponse)
 def job_detail_get(request: Request, job_id: int):
+
     db = SessionLocal()
     try:
         user = require_user(request, db)

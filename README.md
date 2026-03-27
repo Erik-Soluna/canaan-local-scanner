@@ -6,7 +6,7 @@ Web app that scans Canaan Avalon miners (A15 series) via the documented TCP API 
 1. Install deps:
    - `pip install -r requirements.txt`
 2. Start server:
-   - `uvicorn canaan_scanner.app.main:app --reload --host 0.0.0.0 --port 8000`
+   - `uvicorn app.main:app --reload --host 0.0.0.0 --port 8000`
 3. Open `http://localhost:8000`
 
 ## Run (Docker, Linux host)
@@ -52,3 +52,13 @@ For public access, terminate TLS with Caddy or nginx and proxy to `127.0.0.1:800
   - `docker build -f Dockerfile .`
 - Contributor guidelines are in `CONTRIBUTING.md`.
 
+
+
+## Per-device details
+- On a scan job page, use **All devices** to list every IP (paginated), with filters. **Details** shows one machine; raw text may be truncated (Admin debug ZIP has full text).
+
+## Updates from GitHub
+- A banner may appear when GitHub main is ahead of the deployed build (SHA compare).
+- **Docker:** build-arg GIT_SHA is written into the image; docker compose passes GIT_SHA from the environment when building.
+- Override at runtime with DEPLOY_SHA if needed. Optional GITHUB_TOKEN helps GitHub API rate limits.
+- **Server refresh:** cron or webhook: git pull and docker compose up -d --build in the repo.

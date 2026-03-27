@@ -61,9 +61,7 @@
             <td>{{ j.online_ips }}</td>
             <td>{{ (j.hash_rate_sum or 0.0) | hash_rate }}</td>
             <td>
-              <a href="/jobs/{{ j.id }}">View</a>
-              |
-              <a href="/jobs/{{ j.id }}/issues">Issues</a>
+              <a href="/jobs/{{ j.id }}">View</a> | <a href="/jobs/{{ j.id }}/devices">Devices</a> | <a href="/jobs/{{ j.id }}/issues">Issues</a>
             </td>
           </tr>
         {% endfor %}
@@ -72,4 +70,5 @@
     </div>
   </div>
 {% endblock %}
+
 

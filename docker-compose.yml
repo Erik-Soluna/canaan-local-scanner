@@ -3,25 +3,27 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      args:
+        GIT_SHA: ${GIT_SHA:-unknown}
     restart: unless-stopped
     env_file:
       - .env
     ports:
       - "8000:8000"
     environment:
-      # Set these for first-run initialization.
       - ADMIN_USERNAME=${ADMIN_USERNAME:-admin}
       - ADMIN_PASSWORD=${ADMIN_PASSWORD:-admin}
       - SESSION_SECRET=${SESSION_SECRET:-dev-change-me}
       - DB_PATH=/data/canaan_scanner.sqlite
-
-      # Scan tuning (optional)
       - SCAN_CONCURRENCY=${SCAN_CONCURRENCY:-20}
       - CONNECT_TIMEOUT_S=${CONNECT_TIMEOUT_S:-2.0}
       - READ_TIMEOUT_S=${READ_TIMEOUT_S:-5.0}
       - MINER_PORT=${MINER_PORT:-4028}
       - MAX_IPS_PER_SCAN=${MAX_IPS_PER_SCAN:-5000}
       - DEBUG_EXPORT_MAX_BYTES=${DEBUG_EXPORT_MAX_BYTES:-52428800}
+      - DEPLOY_SHA=${DEPLOY_SHA:-}
+      - GITHUB_TOKEN=${GITHUB_TOKEN:-}
+      - GITHUB_REPO=${GITHUB_REPO:-Erik-Soluna/canaan-local-scanner}
     volumes:
       - ./data:/data
     healthcheck:

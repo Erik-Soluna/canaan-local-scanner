@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+
+{% block content %}
+  <h2>Device {% if device %}{{ device.ip_address }}{% else %}{{ missing_ip }}{% endif %}</h2>
+  <p class="muted">
+    <a href="/jobs/{{ scan_job.id }}/devices">Back to all devices</a>
+    ·
+    <a href="/jobs/{{ scan_job.id }}">Job summary</a>
+  </p>
+
+  {% if not device %}
+    <div class="card error">No device row for this IP in job {{ scan_job.id }}.</div>
+  {% else %}
+    <div class="card">
+      <div class="flex-row-responsive">
+        <div class="flex-col gap-sm">
+          <div><strong>Online:</strong> {{ "yes" if device.is_online else "no" }}</div>
+          <div><strong>MHS av:</strong> {{ device.mhs_av | hash_rate }}</div>
+          <div><strong>Model:</strong> {{ device.model or "—" }}</div>
+          <div><strong>Product:</strong> {{ device.prod or "—" }}</div>
+        </div>
+        <div class="flex-col gap-sm">
+          <div><strong>HW type:</strong> {{ device.hwtype or "—" }}</div>
+          <div><strong>Device version:</strong> {{ device.device_version or "—" }}</div>
+          <div><strong>API version:</strong> {{ device.api_version or "—" }}</div>
+          <div><strong>Stage:</strong> {{ device.stage or "—" }}</div>
+        </div>
+      </div>
+      {% if device.error_type or device.error_message %}
+        <div class="error" style="margin-top:10px;">
+          <strong>{{ device.error_type or "error" }}</strong>
+          {% if device.error_message %}<pre style="white-space:pre-wrap;margin:8px 0 0;">{{ device.error_message }}</pre>{% endif %}
+        </div>
+      {% endif %}
+    </div>
+
+    <div class="card">
+      <h3>Raw response</h3>
+      {% if raw_truncated %}
+        <p class="muted">First 12,000 characters shown. Use Admin → Debug export for full text.</p>
+      {% endif %}
+      <pre style="white-space:pre-wrap;overflow:auto;max-height:70vh;font-size:12px;">{{ raw_show }}</pre>
+    </div>
+  {% endif %}
+{% endblock %}
