@@ -52,12 +52,22 @@ def test_trigger_deploy_requires_auth():
     assert c.post("/api/trigger-deploy").status_code == 401
 
 
+def test_deploy_webhook_settings_requires_auth():
+    from starlette.testclient import TestClient
+    from app.main import app
+
+    c = TestClient(app)
+    assert c.get("/api/deploy-webhook-settings").status_code == 401
+    assert c.post("/api/deploy-webhook-settings", json={"webhook_url": ""}).status_code == 401
+
+
+@patch("app.main.resolve_deploy_webhook", return_value=("", ""))
 @patch("app.main.get_deploy_sha", return_value="1111111111111111111111111111111111111111")
 @patch(
     "app.update_check.fetch_github_main_sha",
     return_value=("2222222222222222222222222222222222222222", None),
 )
-def test_trigger_deploy_returns_503_when_webhook_not_configured(mock_gh, mock_deploy):
+def test_trigger_deploy_returns_503_when_webhook_not_configured(mock_gh, mock_deploy, mock_resolve):
     from starlette.testclient import TestClient
     from app.main import app
 
@@ -87,3 +97,24 @@ def test_trigger_deploy_returns_409_when_no_update(mock_gh, mock_deploy):
     r2 = c.post("/api/trigger-deploy")
     assert r2.status_code == 409
     assert r2.json().get("error") == "no_update"
+
+
+def test_deploy_webhook_settings_get_post_as_admin():
+    from starlette.testclient import TestClient
+    from app.main import app
+
+    c = TestClient(app)
+    r = c.post("/login", data={"username": "admin", "password": "admin"}, follow_redirects=False)
+    assert r.status_code == 303
+
+    g = c.get("/api/deploy-webhook-settings")
+    assert g.status_code == 200
+    assert "webhook_url" in g.json()
+    assert "secret_set" in g.json()
+
+    p = c.post("/api/deploy-webhook-settings", json={"webhook_url": "http://example.test/hook"})
+    assert p.status_code == 200
+    assert p.json().get("ok") is True
+
+    g2 = c.get("/api/deploy-webhook-settings")
+    assert g2.json().get("webhook_url") == "http://example.test/hook"

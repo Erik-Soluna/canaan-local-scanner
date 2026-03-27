@@ -95,16 +95,18 @@ def build_update_payload(deployed_sha: str, *, force_refresh: bool = False) -> d
     }
 
 
-def trigger_deploy_webhook() -> tuple[bool, int | None, str | None]:
-    """POST to ``DEPLOY_WEBHOOK_URL`` (optional ``DEPLOY_WEBHOOK_SECRET`` as Bearer).
+def trigger_deploy_webhook(url: str, secret: str) -> tuple[bool, int | None, str | None]:
+    """POST JSON ``{}`` to the given URL (optional ``secret`` as ``Authorization: Bearer``).
 
-    Returns ``(success, http_status, error_message)``. If the URL is unset,
-    returns ``(False, None, "not_configured")``.
+    Callers pass ``url`` / ``secret`` from :func:`deploy_webhook_settings.resolve_deploy_webhook`
+    (merges DB + env). If ``url`` is empty, returns ``(False, None, "not_configured")``.
     """
-    url = os.getenv("DEPLOY_WEBHOOK_URL", "").strip()
+    url = (url or "").strip()
     if not url:
         return False, None, "not_configured"
-    secret = os.getenv("DEPLOY_WEBHOOK_SECRET", "").strip()
+    if not url.lower().startswith(("http://", "https://")):
+        url = "http://" + url
+    secret = (secret or "").strip()
     body = b"{}"
     req = urllib.request.Request(url, data=body, method="POST")
     req.add_header("Content-Type", "application/json")

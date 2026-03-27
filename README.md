@@ -59,9 +59,11 @@ The Docker image records a short deploy revision (build arg `GIT_SHA` / file `ap
 - `GET /api/update-status` — JSON payload (cached GitHub SHA for `GITHUB_UPDATE_CACHE_TTL_S`, default **600** seconds).
 - `GET /api/update-status?refresh=1` — same, but **forces** a fresh fetch of `main` from the GitHub API (bypasses that cache for this request). Optional `GITHUB_TOKEN` improves rate limits.
 
-The app does **not** auto-pull or restart containers by itself. Redeploy using your normal process, or configure **`DEPLOY_WEBHOOK_URL`** (optional **`DEPLOY_WEBHOOK_SECRET`** as `Authorization: Bearer …`) so admins can use **Trigger deploy** on Settings: the server POSTs `{}` to that URL when GitHub `main` is ahead of this deployment (your CI or host should pull/rebuild/restart).
+The app does **not** auto-pull or restart containers by itself. Redeploy using your normal process, or configure a **deploy webhook** so admins can use **Trigger deploy** on Settings: the server POSTs `{}` to that URL when GitHub `main` is ahead of this deployment (your CI or host should pull/rebuild/restart).
 
-- `POST /api/trigger-deploy` — admin session only; returns **503** if `DEPLOY_WEBHOOK_URL` is unset, **409** if no update is available, **502** if the webhook HTTP call fails.
+- **Settings (admin)** — save **Webhook URL** and optional **Secret** in the database (no `.env` required). **`DEPLOY_WEBHOOK_URL`** / **`DEPLOY_WEBHOOK_SECRET`** in the environment still work if the DB URL is empty or you want secrets only in env.
+- `POST /api/trigger-deploy` — admin session only; returns **503** if no webhook URL is configured (DB or env), **409** if no update is available, **502** if the webhook HTTP call fails.
+- `GET` / `POST /api/deploy-webhook-settings` — admin only; load or save the stored webhook (JSON body for POST: `webhook_url`, optional `webhook_secret`; omit `webhook_secret` to leave the current secret unchanged, send `""` with **Clear stored secret** to remove it).
 
 ## HTTPS reverse proxy (optional)
 For public access, terminate TLS with Caddy or nginx and proxy to `127.0.0.1:8000`.

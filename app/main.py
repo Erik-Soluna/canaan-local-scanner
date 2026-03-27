@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import FastAPI, Form, HTTPException, Query, Request
+from pydantic import BaseModel
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse, StreamingResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy import case, func, or_, select, delete, and_
@@ -17,6 +18,7 @@ from . import audit
 from .auth import create_initial_admin_if_missing, get_current_user, verify_password
 from .db import ENGINE, SessionLocal
 from .models import DeviceResult, IpRange, ScanJob, User
+from .deploy_webhook_settings import get_or_create_row, resolve_deploy_webhook
 from .parsing import format_hash_rate_mhs
 from .scanner import ip_expansion_count, run_scan_job_background
 from .update_check import build_update_payload, get_deploy_sha, trigger_deploy_webhook
@@ -29,6 +31,10 @@ templates.env.filters["hash_rate"] = format_hash_rate_mhs
 
 DEBUG_EXPORT_MAX_BYTES = int(os.getenv("DEBUG_EXPORT_MAX_BYTES", str(50 * 1024 * 1024)))
 
+
+class DeployWebhookSave(BaseModel):
+    webhook_url: str = ""
+    webhook_secret: str | None = None  # None = leave secret unchanged; "" = clear
 
 
 def _utf8_bom_bytes(text: str) -> bytes:
@@ -191,13 +197,14 @@ def settings_get(request: Request):
         user = require_user(request, db)
         if not user:
             return redirect_to_login()
-        return templates.TemplateResponse(
-            "settings.html",
-            {"request": request, "user": user, "title": "Settings"},
-        )
+        ctx: dict = {"request": request, "user": user, "title": "Settings"}
+        if user.is_admin:
+            row = get_or_create_row(db)
+            ctx["deploy_webhook_url"] = row.webhook_url or ""
+            ctx["deploy_webhook_secret_set"] = bool((row.webhook_secret or "").strip())
+        return templates.TemplateResponse("settings.html", ctx)
     finally:
         db.close()
-
 
 
 @app.get("/dashboard", response_class=HTMLResponse)
@@ -671,9 +678,62 @@ def api_update_status(request: Request, refresh: bool = Query(False)):
         db.close()
 
 
+@app.get("/api/deploy-webhook-settings", response_class=JSONResponse)
+def api_deploy_webhook_settings_get(request: Request):
+    db = SessionLocal()
+    try:
+        user = require_user(request, db)
+        if not user:
+            return JSONResponse({"error": "unauthorized"}, status_code=401)
+        if not user.is_admin:
+            return JSONResponse({"error": "forbidden"}, status_code=403)
+        row = get_or_create_row(db)
+        return JSONResponse(
+            {
+                "webhook_url": row.webhook_url or "",
+                "secret_set": bool((row.webhook_secret or "").strip()),
+            }
+        )
+    finally:
+        db.close()
+
+
+@app.post("/api/deploy-webhook-settings", response_class=JSONResponse)
+def api_deploy_webhook_settings_post(request: Request, body: DeployWebhookSave):
+    db = SessionLocal()
+    try:
+        user = require_user(request, db)
+        if not user:
+            return JSONResponse({"error": "unauthorized"}, status_code=401)
+        if not user.is_admin:
+            return JSONResponse({"error": "forbidden"}, status_code=403)
+
+        row = get_or_create_row(db)
+        row.webhook_url = body.webhook_url.strip() or None
+        if body.webhook_secret is not None:
+            row.webhook_secret = body.webhook_secret.strip() or None
+        db.commit()
+
+        audit.log_event(
+            db,
+            user_id=user.id,
+            request_ip=get_client_ip(request),
+            event_type="DEPLOY_WEBHOOK_SETTINGS",
+            target_type="settings",
+            target_id="deploy_webhook",
+            metadata={
+                "webhook_url_set": bool(row.webhook_url),
+                "secret_set": bool(row.webhook_secret),
+            },
+        )
+        return JSONResponse({"ok": True})
+    finally:
+        db.close()
+
+
 @app.post("/api/trigger-deploy", response_class=JSONResponse)
 def api_trigger_deploy(request: Request):
-    """Admin-only: POST optional ``DEPLOY_WEBHOOK_URL`` when GitHub main is ahead of this deploy."""
+    """Admin-only: POST deploy webhook when GitHub main is ahead of this deploy."""
     db = SessionLocal()
     try:
         user = require_user(request, db)
@@ -694,13 +754,14 @@ def api_trigger_deploy(request: Request):
                 status_code=409,
             )
 
-        ok, http_status, err = trigger_deploy_webhook()
+        hook_url, hook_secret = resolve_deploy_webhook(db)
+        ok, http_status, err = trigger_deploy_webhook(hook_url, hook_secret)
         if err == "not_configured":
             return JSONResponse(
                 {
                     "ok": False,
                     "error": "not_configured",
-                    "message": "Set DEPLOY_WEBHOOK_URL (and optional DEPLOY_WEBHOOK_SECRET) on the server to enable this button.",
+                    "message": "Set the deploy webhook below (admin) or DEPLOY_WEBHOOK_URL in the environment.",
                 },
                 status_code=503,
             )

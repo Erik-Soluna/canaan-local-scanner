@@ -3,6 +3,26 @@
 {% block content %}
   <h2>Settings</h2>
 
+  {% if user.is_admin %}
+  <div class="card" style="margin-bottom:18px;">
+    <h3>Deploy webhook</h3>
+    <p class="muted">Saved in the app database — you do not need <code>DEPLOY_WEBHOOK_URL</code> in <code>.env</code> unless you prefer env-based config. Use a URL reachable from this container (e.g. <code>http://host.docker.internal:PORT/...</code> on Docker Desktop).</p>
+    <form id="deployWebhookForm" style="max-width:640px;">
+      <label for="webhookUrl" style="display:block;margin-top:10px;">Webhook URL</label>
+      <input type="text" id="webhookUrl" name="webhook_url" value="{{ deploy_webhook_url }}" autocomplete="off" style="width:100%;box-sizing:border-box;padding:8px;border-radius:6px;border:1px solid var(--border);background:var(--th-bg);color:inherit;" placeholder="http://host.docker.internal:9000/your-deploy-hook" />
+      <label for="webhookSecret" style="display:block;margin-top:12px;">Secret (optional, sent as Bearer)</label>
+      <input type="password" id="webhookSecret" name="webhook_secret" autocomplete="new-password" style="width:100%;box-sizing:border-box;padding:8px;border-radius:6px;border:1px solid var(--border);background:var(--th-bg);color:inherit;" placeholder="{% if deploy_webhook_secret_set %}Leave blank to keep current secret{% else %}e.g. shared token{% endif %}" />
+      <label style="display:flex;align-items:center;gap:8px;margin-top:10px;font-size:0.9rem;">
+        <input type="checkbox" id="webhookClearSecret" /> Clear stored secret
+      </label>
+      <div class="form-actions" style="margin-top:14px;">
+        <button type="submit">Save webhook</button>
+        <span id="webhookSaveStatus" class="muted"></span>
+      </div>
+    </form>
+  </div>
+  {% endif %}
+
   <div class="card">
     <h3>Software updates</h3>
     <p class="muted">Compares this deployment to the tip of GitHub <code>main</code>. Use <strong>Check again (fresh)</strong> to bypass the server cache (same as the banner &quot;Check again&quot;).</p>
@@ -22,7 +42,7 @@
         <span id="deployTriggerStatus" class="muted" style="margin-left:8px;"></span>
       </div>
       <p id="deployTriggerHint" class="muted" style="margin-top:8px;display:none;font-size:0.9rem;">
-        Calls <code>DEPLOY_WEBHOOK_URL</code> on the server (e.g. CI or your host). Configure env and redeploy once to enable.
+        Save a deploy webhook URL above (admin), or set <code>DEPLOY_WEBHOOK_URL</code> in the environment.
       </p>
       {% endif %}
     </div>
@@ -92,6 +112,45 @@
 
       document.getElementById("btnCheckCached").addEventListener("click", function () { load(false); });
       document.getElementById("btnCheckFresh").addEventListener("click", function () { load(true); });
+      const deployWebhookForm = document.getElementById("deployWebhookForm");
+      if (deployWebhookForm) {
+        deployWebhookForm.addEventListener("submit", async function (ev) {
+          ev.preventDefault();
+          const status = document.getElementById("webhookSaveStatus");
+          const urlEl = document.getElementById("webhookUrl");
+          const secEl = document.getElementById("webhookSecret");
+          const clearEl = document.getElementById("webhookClearSecret");
+          if (status) status.textContent = "Saving…";
+          const payload = { webhook_url: (urlEl && urlEl.value) ? urlEl.value.trim() : "" };
+          if (clearEl && clearEl.checked) {
+            payload.webhook_secret = "";
+          } else if (secEl && secEl.value) {
+            payload.webhook_secret = secEl.value;
+          }
+          try {
+            const r = await fetch("/api/deploy-webhook-settings", {
+              method: "POST",
+              headers: { Accept: "application/json", "Content-Type": "application/json" },
+              credentials: "same-origin",
+              body: JSON.stringify(payload),
+            });
+            const d = await r.json().catch(function () { return {}; });
+            if (!r.ok) {
+              if (status) status.textContent = "";
+              showErr(d.error || d.message || ("HTTP " + r.status));
+              return;
+            }
+            if (status) status.textContent = "Saved.";
+            if (secEl) secEl.value = "";
+            if (clearEl) clearEl.checked = false;
+            setTimeout(function () { if (status) status.textContent = ""; }, 2500);
+          } catch (e) {
+            if (status) status.textContent = "";
+            showErr(String(e));
+          }
+        });
+      }
+
       if (btnDeploy) {
         btnDeploy.addEventListener("click", async function () {
           hideErr();

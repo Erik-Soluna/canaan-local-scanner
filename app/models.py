@@ -95,6 +95,16 @@ class DeviceResult(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
+class DeployWebhookSetting(Base):
+    """Singleton row (id=1): optional deploy hook URL/secret for Settings &quot;Trigger deploy&quot;."""
+
+    __tablename__ = "deploy_webhook_settings"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    webhook_url: Mapped[str | None] = mapped_column(String(2048), nullable=True)
+    webhook_secret: Mapped[str | None] = mapped_column(String(512), nullable=True)
+
+
 class AuditLog(Base):
     __tablename__ = "audit_log"
 
