@@ -29,6 +29,11 @@ templates.env.filters["hash_rate"] = format_hash_rate_mhs
 DEBUG_EXPORT_MAX_BYTES = int(os.getenv("DEBUG_EXPORT_MAX_BYTES", str(50 * 1024 * 1024)))
 
 
+
+def _utf8_bom_bytes(text: str) -> bytes:
+    """UTF-8 with BOM so Windows Notepad detects encoding (avoids mojibake)."""
+    return "\ufeff".encode("utf-8") + text.encode("utf-8")
+
 def get_client_ip(request: Request) -> str:
     try:
         if request.client and request.client.host:
@@ -747,6 +752,7 @@ def admin_debug_export(
         zip_name = f"canaan-debug-job-{job_id}-{stamp}.zip"
 
         readme_lines = [
+            "encoding=UTF-8 with BOM (open as UTF-8 if text looks wrong)",
             f"scan_job_id={job.id}",
             f"range_name={job.range_name_snapshot}",
             f"spec={job.spec_snapshot}",
@@ -761,8 +767,9 @@ def admin_debug_export(
         readme_body = "\n".join(readme_lines) + "\n"
 
         with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
-            zf.writestr("README.txt", readme_body)
-            total_bytes += len(readme_body.encode("utf-8"))
+            readme_b = _utf8_bom_bytes(readme_body)
+            zf.writestr("README.txt", readme_b)
+            total_bytes += len(readme_b)
 
             for dr in rows:
                 ip_safe = dr.ip_address.replace(":", "_").replace("/", "_")
@@ -776,14 +783,14 @@ def admin_debug_export(
                 )
                 body = dr.raw_response or "(no raw_response stored)\n"
                 content = head + body
-                b = content.encode("utf-8")
+                b = _utf8_bom_bytes(content)
                 total_bytes += len(b)
                 if total_bytes > DEBUG_EXPORT_MAX_BYTES:
                     raise HTTPException(
                         status_code=413,
                         detail=f"Export exceeds limit of {DEBUG_EXPORT_MAX_BYTES} bytes; try errors_only or a smaller job.",
                     )
-                zf.writestr(f"devices/{ip_safe}.txt", content)
+                zf.writestr(f"devices/{ip_safe}.txt", b)
 
         audit.log_event(
             db,
