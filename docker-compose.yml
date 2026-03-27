@@ -20,8 +20,8 @@ services:
       - CONNECT_TIMEOUT_S=${CONNECT_TIMEOUT_S:-2.0}
       - READ_TIMEOUT_S=${READ_TIMEOUT_S:-5.0}
       - MINER_PORT=${MINER_PORT:-4028}
-      - MAX_IPS_PER_SCAN=
-      - DEBUG_EXPORT_MAX_BYTES=${MAX_IPS_PER_SCAN:-5000}
+      - MAX_IPS_PER_SCAN=${MAX_IPS_PER_SCAN:-5000}
+      - DEBUG_EXPORT_MAX_BYTES=${DEBUG_EXPORT_MAX_BYTES:-52428800}
     volumes:
       - ./data:/data
     healthcheck:
@@ -30,4 +30,3 @@ services:
       timeout: 10s
       retries: 3
       start_period: 20s
-
