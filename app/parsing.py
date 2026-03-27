@@ -169,3 +169,118 @@ def parse_fans_from_msg(description_msg: str) -> dict[str, Any]:
         "fan1": grab("Fan1"),
         "fanr": grab("FanR"),
     }
+
+
+def split_raw_stages(raw: str | None) -> dict[str, str]:
+    """Split concatenated `[stage] payload` blocks from a stored raw_response."""
+    raw = (raw or "").strip()
+    if not raw:
+        return {}
+    parts = re.split(r"(?m)^\[([^\]]+)\]\s*", raw)
+    if parts and parts[0] == "":
+        parts = parts[1:]
+    out: dict[str, str] = {}
+    for i in range(0, len(parts), 2):
+        if i + 1 >= len(parts):
+            break
+        name = parts[i].strip().lower()
+        body = parts[i + 1].strip()
+        out[name] = body
+    return out
+
+
+def parse_summary_metrics(description: str) -> dict[str, Any]:
+    """Extra counters from SUMMARY,Description=... line (comma-separated KV)."""
+    d: dict[str, Any] = dict(parse_summary(description))
+    for key, rgx in (
+        ("accepted", r"Accepted=([0-9]+)"),
+        ("rejected", r"Rejected=([0-9]+)"),
+        ("hw_errors", r"Hardware Errors=([0-9]+)"),
+        ("discarded", r"Discarded=([0-9]+)"),
+        ("stale", r"Stale=([0-9]+)"),
+        ("get_failures", r"Get Failures=([0-9]+)"),
+        ("utility", r"Utility=([0-9.]+)"),
+        ("best_share", r"Best Share=([0-9]+)"),
+    ):
+        m = re.search(rgx, description)
+        if m:
+            v = m.group(1)
+            d[key] = _to_float_maybe(v) if "." in v else _to_int_maybe(v)
+    return d
+
+
+def parse_primary_pool(pools_text: str) -> dict[str, Any]:
+    """First POOL=0 block: URL and User."""
+    if not pools_text:
+        return {"url": None, "user": None}
+    m = re.search(r"POOL=0,URL=([^,|]+)", pools_text)
+    url = m.group(1).strip() if m else None
+    # User appears after pool-specific fields; take first User= in POOL=0 section before |POOL=1
+    block0 = pools_text.split("|POOL=1", 1)[0] if "|POOL=1" in pools_text else pools_text
+    mu = re.search(r"User=([^,|]+)", block0)
+    user = mu.group(1).strip() if mu else None
+    return {"url": url, "user": user}
+
+
+def parse_estats_key_metrics(text: str) -> dict[str, Any]:
+    """Pull a few fields from the long STATS / MM line in estats."""
+
+    def grab(pat: str) -> str | None:
+        m = re.search(pat, text)
+        return m.group(1).strip() if m else None
+
+    return {
+        "temp": grab(r"Temp\[(\d+)\]"),
+        "tmax": grab(r"TMax\[(\d+)\]"),
+        "tavg": grab(r"TAvg\[(\d+)\]"),
+        "fan1": grab(r"Fan1\[(\d+)\]"),
+        "fan2": grab(r"Fan2\[(\d+)\]"),
+        "fanr": grab(r"FanR\[(\d+)%\]"),
+        "wall_power": grab(r"WALLPOWER\[(\d+)\]"),
+        "ghs_avg": grab(r"GHSavg\[([0-9.]+)\]"),
+        "ghs_mm": grab(r"GHSmm\[([0-9.]+)\]"),
+    }
+
+
+def _short_url_host(url: str | None) -> str | None:
+    if not url:
+        return None
+    u = url.strip()
+    for prefix in ("stratum+tcp://", "stratum+ssl://", "stratum://"):
+        if u.startswith(prefix):
+            u = u[len(prefix) :]
+            break
+    host = u.split("/")[0].split(":")[0]
+    return host or None
+
+
+def enrich_device_from_raw(raw: str | None) -> dict[str, Any]:
+    """Structured fields for API/list/detail views derived from stored raw_response."""
+    sections = split_raw_stages(raw)
+    summary_text = sections.get("summary", "")
+    ps = parse_status_payload(summary_text)
+    desc = ps.description if ps else ""
+    metrics = parse_summary_metrics(desc) if desc else {}
+    pool = parse_primary_pool(sections.get("pools", ""))
+    est = parse_estats_key_metrics(sections.get("estats", ""))
+    boot = sections.get("bootby", "")
+    fan_g = sections.get("fan-global", "")
+
+    return {
+        "elapsed_s": metrics.get("elapsed"),
+        "accepted": metrics.get("accepted"),
+        "rejected": metrics.get("rejected"),
+        "hw_errors": metrics.get("hw_errors"),
+        "discarded": metrics.get("discarded"),
+        "stale": metrics.get("stale"),
+        "utility": metrics.get("utility"),
+        "best_share": metrics.get("best_share"),
+        "pool_url": pool.get("url"),
+        "pool_user": pool.get("user"),
+        "pool_host": _short_url_host(pool.get("url")),
+        "estats": est,
+        "bootby_line": boot[:500] if boot else None,
+        "fan_global_line": fan_g[:500] if fan_g else None,
+        "sections": {k: (v[:2000] + ("…" if len(v) > 2000 else "")) for k, v in sections.items()},
+    }
+

@@ -4,7 +4,7 @@
   <h2>Device {% if device %}{{ device.ip_address }}{% else %}{{ missing_ip }}{% endif %}</h2>
   <p class="muted">
     <a href="/jobs/{{ scan_job.id }}/devices">Back to all devices</a>
-    ·
+    |
     <a href="/jobs/{{ scan_job.id }}">Job summary</a>
   </p>
 
@@ -34,10 +34,74 @@
       {% endif %}
     </div>
 
+    {% if parsed_detail %}
+    <div class="card">
+      <h3>Summary &amp; pool</h3>
+      <div class="table-wrap">
+        <table>
+          <tbody>
+            <tr><th style="text-align:left;width:12rem;">Elapsed (s)</th><td>{{ parsed_detail.elapsed_s if parsed_detail.elapsed_s is not none else "—" }}</td></tr>
+            <tr><th style="text-align:left;">Accepted</th><td>{{ parsed_detail.accepted if parsed_detail.accepted is not none else "—" }}</td></tr>
+            <tr><th style="text-align:left;">Rejected</th><td>{{ parsed_detail.rejected if parsed_detail.rejected is not none else "—" }}</td></tr>
+            <tr><th style="text-align:left;">HW errors</th><td>{{ parsed_detail.hw_errors if parsed_detail.hw_errors is not none else "—" }}</td></tr>
+            <tr><th style="text-align:left;">Stale / discarded</th><td>{{ parsed_detail.stale if parsed_detail.stale is not none else "—" }} / {{ parsed_detail.discarded if parsed_detail.discarded is not none else "—" }}</td></tr>
+            <tr><th style="text-align:left;">Pool URL</th><td style="font-family:monospace;font-size:0.9rem;word-break:break-all;">{{ parsed_detail.pool_url or "—" }}</td></tr>
+            <tr><th style="text-align:left;">Pool user</th><td style="font-family:monospace;font-size:0.9rem;">{{ parsed_detail.pool_user or "—" }}</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3>Board / stats (estats)</h3>
+      {% set e = parsed_detail.estats %}
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Temp</th><th>TMax</th><th>TAvg</th><th>Fan1</th><th>Fan2</th><th>FanR</th><th>GHS avg</th><th>GHS mm</th><th>Wall W</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>{{ e.temp or "—" }}</td>
+              <td>{{ e.tmax or "—" }}</td>
+              <td>{{ e.tavg or "—" }}</td>
+              <td>{{ e.fan1 or "—" }}</td>
+              <td>{{ e.fan2 or "—" }}</td>
+              <td>{{ e.fanr or "—" }}</td>
+              <td>{{ e.ghs_avg or "—" }}</td>
+              <td>{{ e.ghs_mm or "—" }}</td>
+              <td>{{ e.wall_power or "—" }}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3>Per-query payload (truncated)</h3>
+      <p class="muted">Each block is what the scanner stored for that TCP query.</p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Stage</th><th>Payload preview</th></tr></thead>
+          <tbody>
+            {% for name, body in parsed_detail.sections|dictsort %}
+              <tr>
+                <td style="font-family:monospace;vertical-align:top;">{{ name }}</td>
+                <td><pre style="white-space:pre-wrap;margin:0;font-size:11px;max-height:240px;overflow:auto;">{{ body }}</pre></td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+    {% endif %}
+
     <div class="card">
       <h3>Raw response</h3>
       {% if raw_truncated %}
-        <p class="muted">First 12,000 characters shown. Use Admin → Debug export for full text.</p>
+        <p class="muted">First 12,000 characters shown. Use Admin to Debug export for full text.</p>
       {% endif %}
       <pre style="white-space:pre-wrap;overflow:auto;max-height:70vh;font-size:12px;">{{ raw_show }}</pre>
     </div>

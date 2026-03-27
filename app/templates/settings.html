@@ -1,0 +1,79 @@
+{% extends "base.html" %}
+
+{% block content %}
+  <h2>Settings</h2>
+
+  <div class="card">
+    <h3>Software updates</h3>
+    <p class="muted">Compares this deployment to the tip of GitHub <code>main</code>. Use <strong>Check again (fresh)</strong> to bypass the server cache (same as the banner &quot;Check again&quot;).</p>
+    <div class="form-row" style="margin-top:12px;">
+      <div class="form-actions">
+        <button type="button" id="btnCheckCached">Refresh status</button>
+        <button type="button" id="btnCheckFresh">Check again (fresh)</button>
+      </div>
+      <a id="linkCommits" href="#" target="_blank" rel="noopener" style="align-self:flex-end;">View commits on GitHub</a>
+    </div>
+    <div id="updateStatusBox" class="card" style="margin-top:14px;display:none;border-color:#f59e0b;">
+      <strong>Update available</strong>
+      <p id="updateStatusText" class="muted" style="margin:8px 0 0;"></p>
+    </div>
+    <div id="updateOkBox" class="muted" style="margin-top:12px;"></div>
+    <div id="updateErrBox" class="error" style="margin-top:8px;display:none;"></div>
+    <h4 style="margin:16px 0 8px;font-size:0.95rem;">Details</h4>
+    <pre id="updateJson" style="font-size:12px;overflow:auto;max-height:220px;margin:0;padding:10px;border:1px solid var(--border);border-radius:6px;background:var(--th-bg);"></pre>
+  </div>
+
+  <script>
+    (function () {
+      const banner = document.getElementById("updateStatusBox");
+      const okBox = document.getElementById("updateOkBox");
+      const errBox = document.getElementById("updateErrBox");
+      const text = document.getElementById("updateStatusText");
+      const jsonPre = document.getElementById("updateJson");
+      const link = document.getElementById("linkCommits");
+
+      function showErr(msg) {
+        errBox.style.display = "block";
+        errBox.textContent = msg || "";
+      }
+      function hideErr() {
+        errBox.style.display = "none";
+        errBox.textContent = "";
+      }
+
+      async function load(refresh) {
+        hideErr();
+        okBox.textContent = "Loading…";
+        const url = refresh ? "/api/update-status?refresh=1" : "/api/update-status";
+        try {
+          const r = await fetch(url, { headers: { Accept: "application/json" } });
+          const d = await r.json();
+          if (!r.ok) {
+            okBox.textContent = "";
+            showErr(d.error || ("HTTP " + r.status));
+            jsonPre.textContent = JSON.stringify(d, null, 2);
+            return;
+          }
+          jsonPre.textContent = JSON.stringify(d, null, 2);
+          if (d.html_url) link.href = d.html_url;
+          const ds = (d.deployed_sha || "?").toString().slice(0, 7);
+          const gs = (d.github_sha || "?").toString().slice(0, 7);
+          okBox.textContent = "Deployed " + ds + " — GitHub main " + gs + (d.github_error ? " (GitHub note: " + d.github_error + ")" : "");
+          if (d.update_available) {
+            banner.style.display = "block";
+            text.textContent = "A newer revision exists on main (" + gs + "). Pull and redeploy to update.";
+          } else {
+            banner.style.display = "none";
+          }
+        } catch (e) {
+          okBox.textContent = "";
+          showErr(String(e));
+        }
+      }
+
+      document.getElementById("btnCheckCached").addEventListener("click", function () { load(false); });
+      document.getElementById("btnCheckFresh").addEventListener("click", function () { load(true); });
+      load(false);
+    })();
+  </script>
+{% endblock %}

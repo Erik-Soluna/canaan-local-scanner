@@ -48,6 +48,7 @@ The miner TCP API may keep the socket open until the read deadline. The scanner 
 ## GitHub deploy identity and update checks
 The Docker image records a short deploy revision (build arg `GIT_SHA` / file `app/.deploy_sha`, or env `DEPLOY_SHA`). While logged in, the UI can compare that to the tip of GitHub `main` and show a banner when they differ.
 
+- `GET /settings` — web page (logged-in) showing deploy vs GitHub `main`, JSON details, and buttons to **Refresh status** (cached) or **Check again (fresh)** (`?refresh=1`).
 - `GET /api/update-status` — JSON payload (cached GitHub SHA for `GITHUB_UPDATE_CACHE_TTL_S`, default **600** seconds).
 - `GET /api/update-status?refresh=1` — same, but **forces** a fresh fetch of `main` from the GitHub API (bypasses that cache for this request). Optional `GITHUB_TOKEN` improves rate limits.
 

@@ -22,7 +22,10 @@
           <option value="false">Offline</option>
         </select>
       </label>
-      <label>IP prefix <input type="text" id="fQ" placeholder="10.1." style="width:140px" /></label>
+      <label>IP prefix <input type="text" id="fQ" placeholder="10.1." style="width:120px" /></label>
+      <label>Model contains <input type="text" id="fModel" placeholder="15Pro" style="width:100px" /></label>
+      <label>Pool contains <input type="text" id="fPool" placeholder="luxor" style="width:100px" /></label>
+      <label>Min MHS av <input type="number" id="fMinMhs" placeholder="0" step="any" style="width:100px" /></label>
       <label style="display:flex;align-items:center;gap:6px;"><input type="checkbox" id="fErrors" /> Errors only</label>
       <label>Page size
         <select id="fPageSize"><option value="50">50</option><option value="100">100</option><option value="200">200</option></select>
@@ -34,11 +37,24 @@
   <div class="card">
     <h3>Machines</h3>
     <p class="muted" id="metaLine">Loading…</p>
-    <div class="table-wrap">
-      <table>
+    <div class="table-wrap" style="overflow-x:auto;">
+      <table style="min-width:max-content;">
         <thead>
           <tr>
-            <th>IP</th><th>Online</th><th>Hash rate</th><th>Model</th><th>Product</th><th>API</th><th>Error</th><th></th>
+            <th>IP</th>
+            <th>On</th>
+            <th>Hash rate</th>
+            <th>Model</th>
+            <th>Elapsed</th>
+            <th>Pool</th>
+            <th>Temp</th>
+            <th>TMax</th>
+            <th>Fan1/2</th>
+            <th>W</th>
+            <th>HW err</th>
+            <th>Acc</th>
+            <th>Error</th>
+            <th></th>
           </tr>
         </thead>
         <tbody id="tbody"></tbody>
@@ -59,6 +75,8 @@
       d.textContent = s == null ? "" : String(s);
       return d.innerHTML;
     }
+    function det(r) { return r.detail || {}; }
+    function est(r) { return det(r).estats || {}; }
     async function load() {
       const params = new URLSearchParams({ page: String(page), page_size: document.getElementById("fPageSize").value });
       const c = document.getElementById("fC").value;
@@ -67,6 +85,12 @@
       if (o) params.set("online", o);
       const q = document.getElementById("fQ").value.trim();
       if (q) params.set("q", q);
+      const mq = document.getElementById("fModel").value.trim();
+      if (mq) params.set("model_q", mq);
+      const pq = document.getElementById("fPool").value.trim();
+      if (pq) params.set("pool_q", pq);
+      const mm = document.getElementById("fMinMhs").value.trim();
+      if (mm !== "") params.set("min_mhs", mm);
       if (document.getElementById("fErrors").checked) params.set("errors_only", "true");
       const res = await fetch("/api/jobs/" + JOB_ID + "/devices?" + params.toString(), { headers: { "Accept": "application/json" } });
       if (!res.ok) { document.getElementById("metaLine").textContent = "Failed (" + res.status + ")"; return; }
@@ -78,7 +102,11 @@
       document.getElementById("pageLabel").textContent = "Page " + data.page;
       document.getElementById("tbody").innerHTML = (data.rows || []).map(function (r) {
         var u = "/jobs/" + JOB_ID + "/device?ip=" + encodeURIComponent(r.ip_address);
-        return "<tr><td style=\"font-family:monospace\">" + esc(r.ip_address) + "</td><td>" + (r.is_online ? "yes" : "no") + "</td><td>" + esc(r.mhs_av_formatted) + "</td><td>" + esc(r.model || "") + "</td><td>" + esc(r.prod || "") + "</td><td>" + esc(r.api_version || "") + "</td><td style=\"max-width:200px;overflow:hidden;text-overflow:ellipsis\">" + esc(r.error_type || "") + "</td><td><a href=\"" + u + "\">Details</a></td></tr>";
+        var d = det(r);
+        var e = est(r);
+        var pool = d.pool_host || (d.pool_url ? d.pool_url.slice(0, 32) : "");
+        var fans = (e.fan1 || "—") + "/" + (e.fan2 || "—");
+        return "<tr><td style=\"font-family:monospace\">" + esc(r.ip_address) + "</td><td>" + (r.is_online ? "yes" : "no") + "</td><td>" + esc(r.mhs_av_formatted) + "</td><td>" + esc(r.model || "") + "</td><td>" + esc(d.elapsed_s != null ? d.elapsed_s : "") + "</td><td style=\"max-width:140px;overflow:hidden;text-overflow:ellipsis;font-size:12px\">" + esc(pool) + "</td><td>" + esc(e.temp || "") + "</td><td>" + esc(e.tmax || "") + "</td><td style=\"font-size:12px\">" + esc(fans) + "</td><td>" + esc(e.wall_power || "") + "</td><td>" + esc(d.hw_errors != null ? d.hw_errors : "") + "</td><td>" + esc(d.accepted != null ? d.accepted : "") + "</td><td style=\"max-width:120px;overflow:hidden;font-size:12px\">" + esc(r.error_type || "") + "</td><td><a href=\"" + u + "\">Details</a></td></tr>";
       }).join("");
     }
     document.getElementById("btnApply").addEventListener("click", function () { page = 1; load(); });

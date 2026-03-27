@@ -3,6 +3,10 @@
 {% block content %}
   <h2>Scan History</h2>
 
+  {% if delete_error == "running" %}
+    <div class="card error" style="margin-bottom:12px;">Cannot delete a scan while it is <strong>running</strong>. Wait for it to finish or fail.</div>
+  {% endif %}
+
   <div class="card">
     <form method="get" action="/jobs" class="form-row">
       <label>
@@ -48,6 +52,7 @@
           <th>Online</th>
           <th>Hash Sum (MHS av)</th>
           <th>Links</th>
+          <th>Delete</th>
         </tr>
       </thead>
       <tbody>
@@ -59,9 +64,22 @@
             <td style="font-family: monospace;">{{ j.status }}</td>
             <td>{{ j.completed_ips }} / {{ j.total_ips }}</td>
             <td>{{ j.online_ips }}</td>
-            <td>{{ (j.hash_rate_sum or 0.0) | hash_rate }}</td>
+            <td>{{ j.hash_rate_sum or 0.0 }}</td>
             <td>
-              <a href="/jobs/{{ j.id }}">View</a> | <a href="/jobs/{{ j.id }}/devices">Devices</a> | <a href="/jobs/{{ j.id }}/issues">Issues</a>
+              <a href="/jobs/{{ j.id }}">View</a>
+              |
+              <a href="/jobs/{{ j.id }}/devices">Devices</a>
+              |
+              <a href="/jobs/{{ j.id }}/issues">Issues</a>
+            </td>
+            <td>
+              {% if j.status != "running" %}
+                <form method="post" action="/jobs/{{ j.id }}/delete" style="display:inline;margin:0;" onsubmit="return confirm('Delete scan job {{ j.id }} and all device rows?');">
+                  <button type="submit">Delete</button>
+                </form>
+              {% else %}
+                <span class="muted">—</span>
+              {% endif %}
             </td>
           </tr>
         {% endfor %}
@@ -70,5 +88,4 @@
     </div>
   </div>
 {% endblock %}
-
 

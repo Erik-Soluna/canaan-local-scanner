@@ -160,6 +160,7 @@
             <a href="/ranges">Ranges</a>
             <a href="/jobs">History</a>
             <a href="/dashboard">Dashboard</a>
+            <a href="/settings">Settings</a>
             {% if user.is_admin %}
               <a href="/admin/users">Admin Users</a>
             {% endif %}
@@ -172,41 +173,6 @@
           {% endif %}
         </nav>
       </header>
-      {% if user %}
-      <div id="updateBanner" class="card" style="display:none;margin-top:0;border-color:#f59e0b;padding:10px 14px;">
-        <span id="updateBannerText"></span>
-        <a id="updateBannerLink" href="#" target="_blank" rel="noopener" style="margin-left:8px;">View on GitHub</a>
-        <button type="button" id="updateBannerRefresh" style="margin-left:10px;">Check again</button>
-        <button type="button" id="updateBannerDismiss" style="margin-left:10px;">Dismiss</button>
-      </div>
-      <script>
-      (function(){
-        var b=document.getElementById("updateBanner");
-        if(!b) return;
-        function apply(d){
-          if(!d.update_available) {
-            b.style.display="none";
-            return;
-          }
-          var t=document.getElementById("updateBannerText");
-          var a=document.getElementById("updateBannerLink");
-          if(d.html_url) a.href=d.html_url;
-          var ds=(d.deployed_sha||"?").toString().slice(0,7);
-          var gs=(d.github_sha||"?").toString().slice(0,7);
-          t.textContent="A newer version is on GitHub (deployed "+ds+", latest "+gs+"). Pull and redeploy to update.";
-          b.style.display="block";
-        }
-        fetch("/api/update-status").then(function(r){return r.json();}).then(apply).catch(function(){});
-        var ref=document.getElementById("updateBannerRefresh");
-        if(ref) ref.addEventListener("click",function(){
-          fetch("/api/update-status?refresh=1").then(function(r){return r.json();}).then(apply).catch(function(){});
-        });
-        var btn=document.getElementById("updateBannerDismiss");
-        if(btn) btn.addEventListener("click",function(){ b.style.display="none"; });
-      })();
-      </script>
-      {% endif %}
-
       <main class="main-content">
         {% block content %}{% endblock %}
       </main>

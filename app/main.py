@@ -184,6 +184,22 @@ def jobs_history_get(
         db.close()
 
 
+@app.get("/settings", response_class=HTMLResponse)
+def settings_get(request: Request):
+    db = SessionLocal()
+    try:
+        user = require_user(request, db)
+        if not user:
+            return redirect_to_login()
+        return templates.TemplateResponse(
+            "settings.html",
+            {"request": request, "user": user, "title": "Settings"},
+        )
+    finally:
+        db.close()
+
+
+
 @app.get("/dashboard", response_class=HTMLResponse)
 def dashboard_get(request: Request, limit: int = 50):
     db = SessionLocal()

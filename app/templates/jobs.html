@@ -7,6 +7,18 @@
 
   <h2>Scan Job: {{ scan_job.range_name_snapshot }} (ID {{ scan_job.id }})</h2>
 
+  <p class="muted" style="margin-bottom:12px;">
+    <a href="/jobs/{{ scan_job.id }}/devices">All devices</a>
+    |
+    <a href="/jobs/{{ scan_job.id }}/issues">Issues</a>
+    {% if scan_job.status != "running" %}
+      |
+      <form method="post" action="/jobs/{{ scan_job.id }}/delete" style="display:inline;margin:0;" onsubmit="return confirm('Delete this scan job and all device rows?');">
+        <button type="submit">Delete scan</button>
+      </form>
+    {% endif %}
+  </p>
+
   <div class="card">
     <div class="flex-row-responsive">
       <div class="flex-col gap-sm" style="flex: 2 1 280px;">
@@ -15,7 +27,7 @@
       </div>
       <div class="flex-col gap-sm" style="flex: 2 1 280px;">
         <div><strong>Online:</strong> <span id="jobOnline">{{ scan_job.online_ips }}</span></div>
-        <div><strong>Hash Rate Sum (MHS av):</strong> <span id="jobHashSum">{{ (scan_job.hash_rate_sum or 0.0) | hash_rate }}</span></div>
+        <div><strong>Hash Rate Sum (MHS av):</strong> <span id="jobHashSum">{{ scan_job.hash_rate_sum or 0.0 }}</span></div>
       </div>
     </div>
     {% if scan_job.error_message %}
@@ -44,7 +56,7 @@
             <td style="font-family: monospace;">{{ r.c }}</td>
             <td>{{ r.attempted_count }}</td>
             <td>{{ r.online_count }}</td>
-            <td>{{ r.mhs_sum | hash_rate }}</td>
+            <td>{{ r.mhs_sum }}</td>
           </tr>
         {% endfor %}
       </tbody>
@@ -52,26 +64,14 @@
     </div>
 
     <div style="margin-top: 12px;">
-      <a href="/jobs/{{ scan_job.id }}/issues">Issues</a> | <a href="/jobs/{{ scan_job.id }}/devices">All devices</a>
+      <a href="/jobs/{{ scan_job.id }}/devices">All devices</a>
+      |
+      <a href="/jobs/{{ scan_job.id }}/issues">Issues</a>
     </div>
   </div>
 
   <script>
     // JS is only UI enhancement; page remains usable without it.
-    const HASH_UNITS = ["MH/s", "GH/s", "TH/s", "PH/s", "EH/s"];
-    function formatHashRateMhs(mhs) {
-      const v = Number(mhs);
-      if (mhs == null || !Number.isFinite(v)) return "\u2014";
-      if (v === 0) return "0 MH/s";
-      let power = 0;
-      for (let p = 4; p >= 0; p--) {
-        if (v / Math.pow(1000, p) >= 1) { power = p; break; }
-      }
-      const scaled = v / Math.pow(1000, power);
-      let s = scaled.toFixed(10).replace(/\.?0+$/, "");
-      return s + " " + HASH_UNITS[power];
-    }
-
     const JOB_ID = {{ scan_job.id }};
 
     async function getJson(url) {
@@ -91,7 +91,7 @@
         setText("jobStatus", s.status);
         setText("jobProgress", `${s.completed_ips} / ${s.total_ips}`);
         setText("jobOnline", s.online_ips);
-        setText("jobHashSum", formatHashRateMhs(s.hash_rate_sum));
+        setText("jobHashSum", s.hash_rate_sum);
         if (s.error_message) {
           const errWrap = document.getElementById("jobError")?.parentElement?.parentElement;
           if (errWrap) errWrap.style.display = "block";
@@ -108,7 +108,7 @@
                 <td style="font-family: monospace;">${b.c}</td>
                 <td>${b.attempted_count}</td>
                 <td>${b.online_count}</td>
-                <td>${formatHashRateMhs(b.mhs_sum)}</td>
+                <td>${b.mhs_sum}</td>
               </tr>
             `).join("");
           }
@@ -124,5 +124,4 @@
     setTimeout(poll, 1500);
   </script>
 {% endblock %}
-
 
